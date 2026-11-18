@@ -1,0 +1,31 @@
+{
+  "name": "ai-factory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Local AI software factory: GitHub issue or text request -> spec -> TDD build -> checks -> 4 reviewers -> risk gate -> pull request.",
+  "bin": {
+    "factory": "./src/cli.ts"
+  },
+  "scripts": {
+    "factory": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.326",
+    "picomatch": "^4.0.7",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/picomatch": "^4.0.3",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.12"
+  },
+  "license": "MIT"
+}

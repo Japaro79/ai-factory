@@ -1,0 +1,8 @@
+node_modules/
+.factory/
+*.log
+
+# Personal, never published: your notes, Gentle AI skill registry
+TODO.md
+odd/
+.atl/

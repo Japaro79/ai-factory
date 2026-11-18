@@ -1,0 +1,158 @@
+# AI Factory
+
+An AI software factory you run on your own machine. Work goes in as a GitHub issue or a plain-text request; a
+reviewed pull request comes out. Nobody chats with the code in between: you write the request and you review the PR.
+
+```
+request ─► worktree ─► spec ─► build (TDD) ─► checks ─► 4 reviewers ─► approval ─► risk gate ─► pull request
+                                  ▲                                       │
+                                  └──────── findings / failing tests ─────┘   (at most N rounds)
+```
+
+It works on any repository: it detects the stack (Node, Flutter, Go, Rust, Python) and writes a per-project config
+with the right checks and risk rules. A live local dashboard shows every run of every project.
+
+> **Status.** The issue/text pipeline is working and in daily use. Next on the roadmap: a global technical memory
+> shared across projects, and building new apps from an idea (plan → approve → build by phases). See [Roadmap](#roadmap).
+
+## How it works
+
+| Station | Kind | What it does |
+|---------|------|--------------|
+| Intake | code | Reads a GitHub issue (`gh`), a text request, or a local markdown task. |
+| Worktree | code | One isolated git worktree and branch per task, next to the repo: `<repo>-worktrees/factory-<task>`. Your checkout is never touched. |
+| Spec | agent | Reads the project's own docs (README, docs, specs) and the code, then writes a testable spec with acceptance criteria into the project. |
+| Build | agent | Implements the spec with TDD inside the worktree. Shell access is limited to an allowlist; it never commits or pushes. |
+| Checks | code | Runs the project's checks (install, typecheck/analyze, tests). The exit code decides, not the agent. |
+| 4 reviewers | agents, in parallel | Security, UX, UI and code, each with a clean context and read-only tools, on a different model than the builder. Findings are `blocker`, `major` or `minor`. |
+| Approval | code | Approves only when checks pass, every reviewer answered and no blocker/major finding remains. Otherwise the findings go back to the builder. |
+| Risk gate | code | `high` when the change touches risky paths (from the project config), is large, or deletes tests. The spec writer can only *raise* it, through notes flagged `escalate`. |
+| Pull request | code | Pushes, opens a PR labeled `factory` + `factory:risk-low|high` (draft + `factory:needs-human` when not approved) and comments on the issue. **Never merges.** |
+
+Design rules:
+
+- **Deterministic where it can be.** Tests, approval and risk are code. Agents only do what needs judgment: understand, write, review.
+- **Bounded.** A maximum number of build rounds and an estimated cost budget per task.
+- **Guarded.** A `PreToolUse` hook enforces each agent's tool allowlist, rejects command chaining (`;`, `&&`, `|`, `$(...)`, redirection) and any write outside the worktree.
+- **Audited.** Every step appends a JSON line (time, step, model, outcome, cost) to the run's audit file; the dashboard is built from it.
+- **Hexagonal.** The core (`src/domain`, `src/application`) knows nothing about GitHub, git or Claude; those are adapters.
+
+## Requirements
+
+- Node 22+
+- [GitHub CLI](https://cli.github.com/) logged in (`gh auth login`)
+- Claude credentials for the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) (a Claude subscription login or an API key)
+- The toolchain of each project you point it at (Flutter, Go, …) on your `PATH`
+
+## Quick start
+
+```bash
+git clone <this repo> ai-factory && cd ai-factory
+npm install
+
+npx tsx src/cli.ts add --repo ../my-app                 # detect the stack, write ../my-app/.factory/project.json, register it
+npx tsx src/cli.ts run --project my-app --issue 12      # GitHub issue → PR
+npx tsx src/cli.ts run --project my-app --text "Add CSV export to the settings screen"   # text request → PR
+npx tsx src/cli.ts dashboard                            # live view at http://127.0.0.1:4747
+```
+
+Review `.factory/project.json` and commit it with your project. Add `--dry-run` to any `run` to do everything locally
+(worktree, agents, checks, commits) without pushing, opening PRs or touching GitHub; the PR it would open is written
+to the run folder instead.
+
+## Commands
+
+```
+factory add --repo <path> [--name <name>] [--config <path>]   register a project (writes .factory/project.json unless --config)
+factory projects                                              list registered projects
+factory init --repo <path> [--force]                          only write <repo>/.factory/project.json
+factory run --project <name> --issue <n> [--dry-run]          one GitHub issue
+factory run --project <name> --text "<request>" [--dry-run]   one plain-text request
+factory run --config <file> --task-file <task.md>             a local markdown task (always a dry run)
+factory poll [--project <name>] [--dry-run]                   open issues labeled "factory"; all projects when none is given
+factory check-config --project <name>                         print the resolved target, checks and limits
+factory dashboard [--port 4747]                               live dashboard over every registered project
+```
+
+`run` and `poll` also start the dashboard in the background unless one is already running (`--no-dashboard` to skip).
+
+## Where your data lives
+
+The repository holds only the factory. Everything about *your* projects stays on your machine:
+
+| What | Where |
+|------|-------|
+| Project registry | `~/.ai-factory/projects.json` |
+| Config of a project that has its own | `<repo>/.factory/project.json` (commit it with the project) |
+| Config kept outside a repo | anywhere, e.g. `~/.ai-factory/projects/<name>.json`, registered with `add --config` |
+| Run history | `<repo>/.factory/runs/` (add it to that repo's `.gitignore`), or `~/.ai-factory/runs/<name>/` for configs kept outside |
+| Spec of each task | `<repo>/odd/tasks/factory-<task id>.md`, committed in the task's PR |
+| Location of this checkout (for launchers) | `~/.ai-factory/home` |
+
+## Project config
+
+`factory add` / `init` infer it from the repo; every field can be edited:
+
+- `target`: GitHub repo, base branch, `brain` (docs the agents must read first), `readOnlyPaths` (e.g. package caches agents may read, never write).
+- `checks.commands`: what must exit 0 after every build round.
+- `specWriter`, `builder`, `reviewers.*`: model, effort and turn limit per role; `builder.allowedBash` is the shell allowlist.
+- `limits`: `maxRounds`, `maxCostUsd` (estimated, at API list prices).
+- `risk`: `highRiskPaths` (glob + reason), `maxLowRiskChangedLines`, `testPathPatterns`.
+
+A full example: [examples/project.json](examples/project.json).
+
+## Running on a schedule (Windows)
+
+`scripts/schedule.ps1` registers a Task Scheduler job that runs `factory poll` hidden every N minutes, as your user,
+while you are logged on. A machine-wide lock skips a trigger while the previous poll is still working.
+
+```powershell
+.\scripts\schedule.ps1 -Minutes 15
+.\scripts\schedule.ps1 -Remove
+```
+
+## Costs
+
+Each agent call reports an estimated cost at API list prices; the per-task budget uses that estimate. With a Claude
+subscription login the runs consume your plan's usage instead of being billed per token. A small change typically
+takes one round and a few minutes.
+
+## Development
+
+```bash
+npm test                              # unit, adapter (real git, no network) and repo-hygiene tests
+npm run typecheck
+npx tsx scripts/sdk-smoke.ts          # one cheap real reviewer call
+npx tsx scripts/permission-probe.ts   # checks the tool guard against the real runtime
+```
+
+`test/repo/noPersonalData.test.ts` fails if a tracked file contains a local path, a personal email or a blocked
+word, so personal data cannot slip into the repo.
+
+## Roadmap
+
+1. **Global technical memory**: lessons learned the hard way (bugs, library and platform gotchas) captured once and
+   recalled before planning and building in every project. Pluggable backend ([Engram](https://github.com/Gentleman-Programming/engram)
+   first) with a local append-only mirror the factory owns.
+2. **Planner**: from an app idea (and only "PC, mobile or both") to a plan with stack, screens, data and phases that you iterate and approve.
+3. **Project creation**: scaffold, git, private repo and initial docs from the approved plan.
+4. **Phase runner**: builds every phase, merges a phase itself only when risk is low and all reviewers approve, stops on high risk.
+5. **Factory app**: the dashboard becomes the place to type ideas, iterate plans and request changes.
+6. **Delivery**: the app starts and is tested; when green, installables are built.
+
+## Credits
+
+- **[Gentle AI](https://github.com/Gentleman-Programming/gentle-ai)** by Gentleman Programming (MIT): the agent
+  harness used to build this factory. Its Organic-Driven Development workflow and feature-document convention
+  shaped how the factory documents tasks in each project.
+- **[Engram](https://github.com/Gentleman-Programming/engram)** by Gentleman Programming (MIT): persistent memory for
+  AI agents; the planned first backend of the global memory.
+- **[RSC Harness](https://github.com/ericrisco/rsc-harness)** and Eric Risco's talk on software factories (MIT): the
+  inspiration for the pipeline (spec writer, builder, four reviewers, approver, risk check).
+- **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)** by Anthropic: runs every agent.
+
+No code from these projects is copied here; they are credited for the ideas and tools this work builds on.
+
+## License
+
+[MIT](LICENSE)
