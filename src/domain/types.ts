@@ -84,6 +84,22 @@ export interface RiskSignal {
   reason: string;
 }
 
+/**
+ * A technical lesson learned the hard way, shared across every project: a bug, a library or platform gotcha,
+ * a tool requirement. Never what an app does.
+ */
+export interface Lesson {
+  title: string;
+  problem: string;
+  fix: string;
+  /** Stack it applies to, e.g. "node", "flutter"; "any" when it is general. */
+  stack: string;
+  tags: string[];
+  /** Where it was learned, e.g. "shop/issue-4". */
+  source: string;
+  createdAt?: string;
+}
+
 export interface Decision {
   approved: boolean;
   feedback: string[];

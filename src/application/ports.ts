@@ -1,4 +1,4 @@
-import type { BuildReport, DiffSummary, ReviewLens, ReviewVerdict, Spec, Task } from "../domain/types.ts";
+import type { BuildReport, DiffSummary, Lesson, ReviewLens, ReviewVerdict, Spec, Task } from "../domain/types.ts";
 
 /** Result of an agent call: the typed output plus what it cost. */
 export interface AgentResult<T> {
@@ -81,6 +81,18 @@ export interface AuditEvent {
   model?: string;
   costUsd?: number;
   detail?: unknown;
+}
+
+export interface RecallQuery {
+  text: string;
+  stack: string;
+  limit: number;
+}
+
+/** Global technical memory shared by every project. */
+export interface Memory {
+  save(lesson: Lesson): Promise<void>;
+  recall(query: RecallQuery): Promise<Lesson[]>;
 }
 
 export interface AuditLog {

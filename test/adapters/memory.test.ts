@@ -1,0 +1,108 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { JsonlMemory, MirroredMemory, keywords, lessonBody, parseLessonBody } from "../../src/adapters/memory.ts";
+import type { Memory } from "../../src/application/ports.ts";
+import type { Lesson } from "../../src/domain/types.ts";
+
+const lesson = (over: Partial<Lesson> = {}): Lesson => ({
+  title: "Vitest cannot resolve paths with spaces on Windows",
+  problem: "Tests failed with ERR_MODULE_NOT_FOUND when the repo path contained spaces on Windows.",
+  fix: "Convert the path with pathToFileURL before importing it.",
+  stack: "node",
+  tags: ["vitest", "windows", "paths"],
+  source: "shop/issue-4",
+  ...over,
+});
+
+let dir: string;
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), "factory-memory-"));
+});
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+describe("keywords", () => {
+  it("keeps meaningful lowercase words without accents, stopwords or duplicates", () => {
+    expect(keywords("The Vitest tests fail on Windows when the path has spaces; añade el path")).toEqual([
+      "vitest",
+      "tests",
+      "fail",
+      "windows",
+      "path",
+      "spaces",
+      "anade",
+    ]);
+  });
+});
+
+describe("lesson body", () => {
+  it("round-trips through the markdown body stored in external memories", () => {
+    const l = lesson();
+    expect(parseLessonBody(l.title, lessonBody(l))).toEqual(l);
+  });
+});
+
+describe("JsonlMemory", () => {
+  it("appends lessons to its file and recalls the relevant ones first, preferring the same stack", async () => {
+    const file = join(dir, "memory", "lessons.jsonl");
+    const mem = new JsonlMemory(file);
+    await mem.save(lesson());
+    await mem.save(lesson({ title: "Flutter pub get needs network", problem: "pub get failed offline", fix: "run it once online", stack: "flutter", tags: ["flutter", "pub"] }));
+    await mem.save(lesson({ title: "Windows paths in Go tests", problem: "paths with spaces broke go test", fix: "use filepath", stack: "go", tags: ["windows", "paths"] }));
+
+    expect((await readFile(file, "utf8")).trim().split("\n")).toHaveLength(3);
+    const found = await mem.recall({ text: "Tests fail on Windows because of spaces in the path", stack: "node", limit: 5 });
+    expect(found.map((l) => l.title)).toEqual(["Vitest cannot resolve paths with spaces on Windows", "Windows paths in Go tests"]);
+    expect(found[0]!.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("returns nothing when there is no file or no match", async () => {
+    const mem = new JsonlMemory(join(dir, "none.jsonl"));
+    expect(await mem.recall({ text: "anything", stack: "node", limit: 5 })).toEqual([]);
+    await mem.save(lesson());
+    expect(await mem.recall({ text: "kubernetes helm chart", stack: "node", limit: 5 })).toEqual([]);
+  });
+});
+
+class FakeMemory implements Memory {
+  saved: Lesson[] = [];
+  constructor(private readonly results: Lesson[] = [], private readonly fail = false) {}
+  async save(l: Lesson) {
+    if (this.fail) throw new Error("engram down");
+    this.saved.push(l);
+  }
+  async recall() {
+    if (this.fail) throw new Error("engram down");
+    return this.results;
+  }
+}
+
+describe("MirroredMemory", () => {
+  it("saves to its own store first and mirrors to the external one", async () => {
+    const own = new FakeMemory();
+    const external = new FakeMemory();
+    await new MirroredMemory(own, external).save(lesson());
+    expect(own.saved).toHaveLength(1);
+    expect(external.saved).toHaveLength(1);
+  });
+
+  it("keeps working on its own store when the external memory fails", async () => {
+    const own = new FakeMemory([lesson()]);
+    const warnings: string[] = [];
+    const mem = new MirroredMemory(own, new FakeMemory([], true), (m) => warnings.push(m));
+    await mem.save(lesson({ title: "another" }));
+    expect(own.saved).toHaveLength(1);
+    expect(await mem.recall({ text: "vitest", stack: "node", limit: 5 })).toHaveLength(1);
+    expect(warnings.join(" ")).toMatch(/engram down/);
+  });
+
+  it("merges both sources without duplicates and respects the limit", async () => {
+    const shared = lesson();
+    const mem = new MirroredMemory(new FakeMemory([shared, lesson({ title: "own only" })]), new FakeMemory([lesson({ title: "external only" }), shared]));
+    const found = await mem.recall({ text: "x", stack: "node", limit: 2 });
+    expect(found.map((l) => l.title)).toEqual(["Vitest cannot resolve paths with spaces on Windows", "own only"]);
+  });
+});
