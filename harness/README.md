@@ -19,6 +19,30 @@ are our own rewrite of its ideas, with our own names and the factory's own tools
 | `rules/codegraph.md` | Use CodeGraph first for structural questions |
 | `output-styles/mentor.md` | The Mentor output style (folded into the voice block for agents without output styles) |
 
+| `rules/checkpoint.md` | How and when to run a Checkpoint review |
+| `rules/agent-basics.md` | Artifact language rule appended to every subagent |
+| `checkpoint/` | Checkpoint reviewer, lens, challenger and confirmer prompts |
+| `skills/` | Skills, with shared references in `skills/_common/` |
+| `agents/` | Subagents: `factory-explorer`, `factory-verifier`, `factory-builder`, `crossfire-a`, `crossfire-b`, `crossfire-fixer` (the `check-*` agents are built from `checkpoint/`) |
+| `guard/` | Permission guards: sensitive files and destructive commands |
+| `opencode/` | The OpenCode plugin that refreshes the skill index |
+
+### Skills
+
+| Skill | Use |
+|-------|-----|
+| `commit-slices` | Plan commits as reviewable slices of behavior |
+| `stacked-prs` | Split a large change into stacked or chained PRs |
+| `pr-ready` | Prepare a PR under the destination repository's policy |
+| `issue-draft` | Create, comment on, label or approve issues safely |
+| `review-replies` | Write review comments and replies |
+| `root-cause-triage` | Triage issues by root cause, fix clusters at the root |
+| `check-defects` | Work a defect fix end to end with Checkpoint |
+| `crossfire` | Blind dual adversarial review with bounded fix rounds |
+| `clear-docs` | Docs that are quick to scan and review |
+| `go-tests` | Go testing patterns |
+| `skill-forge`, `skill-tuneup`, `skill-index` | Create, improve and index skills |
+
 Your own preferences (for example commit conventions or your areas of expertise) go in
 `~/.ai-factory/harness/personal.md`, never in this folder; they are installed as a `personal` block right after the
 voice block.
@@ -29,6 +53,15 @@ voice block.
 factory setup install --dry-run          # see what would change
 factory setup install                    # every agent; or --agent claude-code,codex
 factory setup restore <backup id>        # undo, with the id printed by install
+```
+
+Install also copies the skills and subagents, registers the `ai-factory-memory` and Context7 MCP servers (Codex,
+OpenCode, Antigravity; register them in Claude Code with `claude mcp add`), adds the session hooks (Checkpoint reminder,
+skill index refresh, local usage log), merges the permission guard without overriding your own rules, and selects the
+Mentor output style in Claude Code. Subagent models can be set per agent in `~/.ai-factory/harness.json`:
+
+```json
+{ "agents": { "factory-builder": { "opencode": "openai/gpt-5.5", "claude-code": "opus" } }, "checkpoint": { "model": "claude-sonnet-5-5" } }
 ```
 
 Each block sits between `<!-- ai-factory:<name> -->` markers in the agent's instruction file (`~/.claude/CLAUDE.md`,

@@ -21,7 +21,7 @@ describe("loadBlocks", () => {
     const personal = join(home, "personal.md");
     await writeFile(personal, "- No AI attribution in commits.\n");
     const names = (await loadBlocks({ withStyle: false, personalFile: personal })).map((b) => b.name);
-    expect(names).toEqual(["voice", "personal", "memory", "conductor", "build-flow", "remote-access", "codegraph"]);
+    expect(names).toEqual(["voice", "personal", "memory", "conductor", "build-flow", "checkpoint", "remote-access", "codegraph"]);
     expect((await loadBlocks({ withStyle: false, personalFile: join(home, "none.md") })).map((b) => b.name)).not.toContain("personal");
   });
 
@@ -46,7 +46,7 @@ describe("planRules and applyPlan", () => {
     const result = await applyPlan(await planRules("claude-code", home), backups);
     const doc = await read(".claude/CLAUDE.md");
     expect(doc.startsWith("# My notes\nkeep me\n")).toBe(true);
-    expect(listBlocks(doc)).toEqual(["voice", "memory", "conductor", "build-flow", "remote-access", "codegraph"]);
+    expect(listBlocks(doc)).toEqual(["voice", "memory", "conductor", "build-flow", "checkpoint", "remote-access", "codegraph"]);
     expect(await read(".claude/output-styles/mentor.md")).toContain("name: Mentor");
     expect(result.backupId).toBeTruthy();
   });

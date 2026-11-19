@@ -15,7 +15,7 @@ export const AGENTS = ["claude-code", "codex", "opencode", "antigravity"] as con
 export type AgentId = (typeof AGENTS)[number];
 
 /** Rule blocks in the order every agent receives them; "personal" goes right after "voice" when present. */
-const RULE_ORDER = ["voice", "memory", "conductor", "build-flow", "remote-access", "codegraph"] as const;
+const RULE_ORDER = ["voice", "memory", "conductor", "build-flow", "checkpoint", "remote-access", "codegraph"] as const;
 
 const BLOCK_NUMBERS = ["voice", "personal", ...RULE_ORDER.slice(1)];
 

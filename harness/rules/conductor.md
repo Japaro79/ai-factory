@@ -37,8 +37,8 @@ update is not a request for permission.
 
 ## The workflow
 
-Build Flow is the workflow for every request. Its protocol (in `## Build Flow`) runs first, every time, without the
-user asking for planning or task tracking.
+Build Flow is the workflow for every request. Its protocol (in `# Build Flow`) runs first, every time, without the
+user asking for planning or task tracking. Reviews follow `# Checkpoint`.
 
 ## Faithful blocking prompts
 

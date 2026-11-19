@@ -29,8 +29,12 @@ Usage:
               [--config <path>]               Register with an existing config instead of writing one into the repo.
   factory projects                            List the registered projects.
   factory dashboard [--port 4747]             Live local view of the runs of every registered project.
-  factory setup install [--agent a,b] [--dry-run]  Install the harness rules into Claude Code, Codex, OpenCode, Antigravity.
+  factory setup install [--agent a,b] [--dry-run]  Install the harness (rules, skills, agents, MCP, hooks, guard) into
+                                              Claude Code, Codex, OpenCode and Antigravity, backing up every file.
   factory setup restore <backup id>           Undo a setup install from its backup.
+  factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
+  factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
+  factory usage [record --agent <a> --event <e>]  Show (or record) the local usage log; nothing leaves the machine.
   factory check assess|review|confirm|mode|hook  Checkpoint: review a change at the depth its risk calls for.
                                               Run "factory check" for its options.
   factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
@@ -68,6 +72,9 @@ async function main(): Promise<number> {
       consent: { type: "string" },
       scope: { type: "string" },
       json: { type: "boolean", default: false },
+      quiet: { type: "boolean", default: false },
+      "no-gitignore": { type: "boolean", default: false },
+      event: { type: "string" },
       force: { type: "boolean", default: false },
       "no-dashboard": { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
@@ -112,6 +119,40 @@ async function main(): Promise<number> {
     });
     if (output) (code === 1 ? console.error : console.log)(output);
     return code;
+  }
+
+  if (command === "skills" && positionals[1] === "index") {
+    const { indexSkills } = await import("./harness/skillIndex.ts");
+    const r = await indexSkills(resolve(values.cwd ?? process.cwd()), { noGitignore: values["no-gitignore"] === true });
+    if (!values.quiet) {
+      console.log(
+        r.project
+          ? `${r.path}: ${r.count} skill(s), ${r.changed ? "updated" : "already current"}${r.duplicates.length ? `; duplicates skipped: ${r.duplicates.join(", ")}` : ""}`
+          : "Not a project folder; no skill index written.",
+      );
+    }
+    return 0;
+  }
+
+  if (command === "codegraph" && positionals[1] === "init") {
+    if (!values.cwd) {
+      console.error("codegraph init needs --cwd <project root>.");
+      return 1;
+    }
+    const { initCodegraph } = await import("./harness/codegraph.ts");
+    const r = await initCodegraph(values.cwd);
+    (r.ok ? console.log : console.error)(r.message);
+    return r.ok ? 0 : 1;
+  }
+
+  if (command === "usage") {
+    const { recordUsage, usageReport } = await import("./harness/usage.ts");
+    if (positionals[1] === "record") {
+      await recordUsage(values.agent ?? "unknown", values.event ?? "event").catch(() => undefined);
+      return 0;
+    }
+    for (const line of await usageReport()) console.log(line);
+    return 0;
   }
 
   if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true);
@@ -247,7 +288,8 @@ async function main(): Promise<number> {
 
 /** `factory setup install|restore`: the harness rules for each agent, backed up before every write. */
 async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean): Promise<number> {
-  const { AGENTS, applyPlan, planRules } = await import("./harness/rules.ts");
+  const { AGENTS, applyPlan } = await import("./harness/rules.ts");
+  const { planHarness } = await import("./harness/install.ts");
   const { Backups } = await import("./harness/backups.ts");
   const backups = new Backups(join(FACTORY_HOME, "backups"));
   if (action === "restore") {
@@ -269,7 +311,7 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     return 1;
   }
   for (const agent of agents as (typeof AGENTS)[number][]) {
-    const plan = await planRules(agent, homedir());
+    const plan = await planHarness(agent, homedir());
     if (!plan.writes.length) {
       console.log(`${agent}: up to date`);
       continue;
