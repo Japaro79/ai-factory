@@ -133,3 +133,23 @@ describe("planHarness", () => {
     expect(mcp.mcpServers.context7.serverUrl).toBe("https://mcp.context7.com/mcp");
   });
 });
+
+describe("OpenCode permission guard merge", () => {
+  it("never loosens the user's own permission settings", async () => {
+    await mkdir(join(home, ".config", "opencode"), { recursive: true });
+    await writeFile(join(home, ".config", "opencode", "opencode.json"), JSON.stringify({ permission: { bash: "ask", edit: { "*": "ask" } } }));
+    await install("opencode");
+    const { permission } = await json(".config/opencode/opencode.json");
+    expect(permission.bash).toBe("ask");
+    expect(permission.edit["*"]).toBe("ask");
+    expect(permission.edit["**/.env"]).toBe("deny");
+    expect(permission.read["**/*.pem"]).toBe("deny");
+  });
+
+  it("keeps a top-level permission string untouched", async () => {
+    await mkdir(join(home, ".config", "opencode"), { recursive: true });
+    await writeFile(join(home, ".config", "opencode", "opencode.json"), JSON.stringify({ permission: "ask" }));
+    await install("opencode");
+    expect((await json(".config/opencode/opencode.json")).permission).toBe("ask");
+  });
+});

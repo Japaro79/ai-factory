@@ -164,16 +164,21 @@ function withHook(hooks: Record<string, any[]>, event: string, mark: string, ent
   return { ...hooks, [event]: [...list, entry] };
 }
 
-function mergeGuardRules(current: Record<string, any> | undefined, guard: Record<string, any>): Record<string, any> {
-  const merged: Record<string, any> = { ...(current ?? {}) };
+function mergeGuardRules(current: unknown, guard: Record<string, any>): unknown {
+  // A string (for example "ask") is the user's blanket rule for everything: keep it exactly as it is.
+  if (current !== undefined && (typeof current !== "object" || current === null || Array.isArray(current))) return current;
+  const merged: Record<string, any> = { ...((current as Record<string, any>) ?? {}) };
   for (const [category, rules] of Object.entries(guard)) {
-    if (typeof rules !== "object") {
-      merged[category] ??= rules;
+    const existing = merged[category];
+    if (existing === undefined) {
+      merged[category] = rules;
       continue;
     }
-    const existing = typeof merged[category] === "object" ? merged[category] : {};
-    // The user's own rules win; ours fill in what is missing.
-    merged[category] = { ...rules, ...existing };
+    // A user's string or non-object value for a category is their rule for all of it; never replace it.
+    if (typeof rules !== "object" || typeof existing !== "object" || existing === null) continue;
+    // The user's own rules win and ours only fill in what is missing, never their catch-all "*".
+    const additions = Object.fromEntries(Object.entries(rules).filter(([pattern]) => pattern !== "*" && !(pattern in existing)));
+    merged[category] = { ...existing, ...additions };
   }
   return merged;
 }
