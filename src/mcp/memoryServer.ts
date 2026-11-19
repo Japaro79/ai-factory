@@ -2,7 +2,8 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Memory } from "../application/ports.ts";
 import { clipLessonField, clipNoteBody, fenceLessons, fenceNotes, MAX_FENCED_LESSONS } from "../adapters/lessonText.ts";
-import { NOTE_TYPES, type Note, type NoteType, type SqliteNotes } from "../adapters/notes.ts";
+import type { SqliteNotes } from "../adapters/notes.ts";
+import { NOTE_TYPES, type Note, type NoteType } from "../domain/note.ts";
 
 export interface MemoryServerOptions {
   /** Per-project notes; without it the server only offers the shared lessons. */

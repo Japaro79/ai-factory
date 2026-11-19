@@ -4,27 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { FACTORY_HOME } from "./projectRegistry.ts";
 
-export const NOTE_TYPES = ["decision", "bugfix", "discovery", "convention", "config", "other", "session"] as const;
-export type NoteType = (typeof NOTE_TYPES)[number];
-
-export interface Note {
-  id: number;
-  project: string;
-  type: NoteType;
-  title: string;
-  content: string;
-  topic?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface NewNote {
-  project: string;
-  type: NoteType;
-  title: string;
-  content: string;
-  topic?: string;
-}
+import type { NewNote, Note, NoteType } from "../domain/note.ts";
 
 /** Per-project memory of every agent session: decisions, fixes, discoveries and session summaries. */
 export const DEFAULT_NOTES_FILE = join(FACTORY_HOME, "memory", "notes.db");
@@ -71,6 +51,7 @@ function ftsQuery(text: string): string | undefined {
  */
 export class SqliteNotes {
   private readonly db: DatabaseSync;
+  private closed = false;
 
   constructor(file: string = DEFAULT_NOTES_FILE) {
     mkdirSync(dirname(file), { recursive: true });
@@ -160,7 +141,9 @@ export class SqliteNotes {
   }
 
   close(): void {
-    if (this.db.isOpen) this.db.close();
+    if (this.closed) return;
+    this.closed = true;
+    this.db.close();
   }
 }
 

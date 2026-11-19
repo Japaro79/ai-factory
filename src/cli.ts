@@ -4,9 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { JsonlMemory } from "./adapters/memory.ts";
-import { projectNameFor, SqliteNotes } from "./adapters/notes.ts";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createMemoryServer } from "./mcp/memoryServer.ts";
+import { createMemoryServer, type MemoryServerOptions } from "./mcp/memoryServer.ts";
 import { acquireLock } from "./adapters/pollLock.ts";
 import { initProject } from "./adapters/projectInit.ts";
 import { FACTORY_HOME, ProjectRegistry, runsDirFor } from "./adapters/projectRegistry.ts";
@@ -67,7 +66,15 @@ async function main(): Promise<number> {
   if (command === "mcp") {
     // stdout belongs to the MCP protocol: nothing else may be printed in this mode.
     // The client starts this process in its session folder, so that folder names the current project.
-    const server = createMemoryServer(new JsonlMemory(), { notes: new SqliteNotes(), project: projectNameFor(process.cwd()) });
+    // Loaded here only: node:sqlite stays out of every other command, and if it fails the lessons are still served.
+    let notes: MemoryServerOptions = {};
+    try {
+      const { projectNameFor, SqliteNotes } = await import("./adapters/notes.ts");
+      notes = { notes: new SqliteNotes(), project: projectNameFor(process.cwd()) };
+    } catch (error) {
+      console.error(`ai-factory-memory: session notes unavailable (${error instanceof Error ? error.message : error}); serving lessons only.`);
+    }
+    const server = createMemoryServer(new JsonlMemory(), notes);
     await server.connect(new StdioServerTransport());
     return new Promise<number>(() => {}); // served until the client closes the process
   }
