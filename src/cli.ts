@@ -1,5 +1,6 @@
 #!/usr/bin/env -S npx tsx
 import { mkdir, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -28,6 +29,8 @@ Usage:
               [--config <path>]               Register with an existing config instead of writing one into the repo.
   factory projects                            List the registered projects.
   factory dashboard [--port 4747]             Live local view of the runs of every registered project.
+  factory setup install [--agent a,b] [--dry-run]  Install the harness rules into Claude Code, Codex, OpenCode, Antigravity.
+  factory setup restore <backup id>           Undo a setup install from its backup.
   factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
 
 Options:
@@ -52,6 +55,7 @@ async function main(): Promise<number> {
       project: { type: "string" },
       text: { type: "string" },
       name: { type: "string" },
+      agent: { type: "string" },
       force: { type: "boolean", default: false },
       "no-dashboard": { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
@@ -78,6 +82,8 @@ async function main(): Promise<number> {
     await server.connect(new StdioServerTransport());
     return new Promise<number>(() => {}); // served until the client closes the process
   }
+
+  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true);
 
   const registry = new ProjectRegistry();
   await recordFactoryHome();
@@ -206,6 +212,45 @@ async function main(): Promise<number> {
 
   console.error(`Unknown command "${command}".\n\n${USAGE}`);
   return 1;
+}
+
+/** `factory setup install|restore`: the harness rules for each agent, backed up before every write. */
+async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean): Promise<number> {
+  const { AGENTS, applyPlan, planRules } = await import("./harness/rules.ts");
+  const { Backups } = await import("./harness/backups.ts");
+  const backups = new Backups(join(FACTORY_HOME, "backups"));
+  if (action === "restore") {
+    if (!arg) {
+      console.error("setup restore needs a backup id (printed by setup install).");
+      return 1;
+    }
+    for (const path of await backups.restore(arg)) console.log(`restored ${path}`);
+    return 0;
+  }
+  if (action !== "install") {
+    console.error('setup needs "install" or "restore <backup id>".');
+    return 1;
+  }
+  const agents = agentList ? agentList.split(",").map((a) => a.trim()) : [...AGENTS];
+  const unknown = agents.filter((a) => !(AGENTS as readonly string[]).includes(a));
+  if (unknown.length) {
+    console.error(`Unknown agent(s): ${unknown.join(", ")}. Known: ${AGENTS.join(", ")}.`);
+    return 1;
+  }
+  for (const agent of agents as (typeof AGENTS)[number][]) {
+    const plan = await planRules(agent, homedir());
+    if (!plan.writes.length) {
+      console.log(`${agent}: up to date`);
+      continue;
+    }
+    if (dryRun) {
+      for (const w of plan.writes) console.log(`${agent}: would ${w.content === null ? "delete" : "write"} ${w.path}`);
+      continue;
+    }
+    const { backupId, changed } = await applyPlan(plan, backups);
+    console.log(`${agent}: ${changed.length} file(s) changed, backup ${backupId} (undo: factory setup restore ${backupId})`);
+  }
+  return 0;
 }
 
 /** One poll at a time across the machine: a scheduled poll can outlast its interval. */

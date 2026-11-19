@@ -17,7 +17,7 @@ interface StackSetup {
   readOnlyPaths?: string[];
 }
 
-const BRAIN_CANDIDATES = ["README.md", "CLAUDE.md", "AGENTS.md", "docs/", "specs/", "openspec/", "odd/tasks/"];
+const BRAIN_CANDIDATES = ["README.md", "CLAUDE.md", "AGENTS.md", "docs/", "specs/", "openspec/", "flow/", "odd/tasks/"];
 const COMMON_BASH = ["Bash(git status:*)", "Bash(git diff:*)"];
 const COMMON_RISK = [
   { pattern: ".github/**", reason: "CI/workflows" },

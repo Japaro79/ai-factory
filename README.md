@@ -122,7 +122,7 @@ where the last one stopped:
 - **Storage.** `~/.ai-factory/memory/notes.db`, an SQLite file (Node's built-in `node:sqlite`, no extra dependency)
   with full-text search, safe for several sessions at once.
 - **Untrusted by design.** Notes come back fenced as data, like the lessons, and every input is bounded.
-- **Tell your agent to use it.** Tools alone are not enough: paste [examples/CLAUDE-memory.md](examples/CLAUDE-memory.md)
+- **Tell your agent to use it.** Tools alone are not enough: paste [harness/rules/memory.md](harness/rules/memory.md)
   into your `~/.claude/CLAUDE.md` (or your agent's equivalent) so it loads context at the start, saves as it works and
   writes a summary at the end.
 
@@ -136,7 +136,7 @@ The repository holds only the factory. Everything about *your* projects stays on
 | Config of a project that has its own | `<repo>/.factory/project.json` (commit it with the project) |
 | Config kept outside a repo | anywhere, e.g. `~/.ai-factory/projects/<name>.json`, registered with `add --config` |
 | Run history | `<repo>/.factory/runs/` (add it to that repo's `.gitignore`), or `~/.ai-factory/runs/<name>/` for configs kept outside |
-| Spec of each task | `<repo>/odd/tasks/factory-<task id>.md`, committed in the task's PR |
+| Spec of each task | `<repo>/flow/factory-<task id>.md`, committed in the task's PR |
 | Global technical memory | `~/.ai-factory/memory/lessons.jsonl` (served to other agents by `factory mcp`) |
 | Session memory of each project | `~/.ai-factory/memory/notes.db` (served by `factory mcp`) |
 | Location of this checkout (for launchers) | `~/.ai-factory/home` |

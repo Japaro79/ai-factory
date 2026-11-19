@@ -34,7 +34,7 @@ export interface FactoryDeps {
 export interface FactorySettings {
   maxRounds: number;
   maxCostUsd: number;
-  /** Where the task's spec is written in the project, e.g. odd/tasks/factory-<task id>.md. */
+  /** Where the task's spec is written in the project, e.g. flow/factory-<task id>.md. */
   specPath: (task: Task) => string;
   riskRules: RiskRules;
   /** The project's stack ("node", "flutter", …), used to rank lessons. */

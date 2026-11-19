@@ -34,7 +34,7 @@ export function wire(config: FactoryConfig, options: WireOptions): { deps: Facto
   const github = new GitHubCli(target.githubRepo, config.intake.label, target.baseBranch);
   const worktrees = new GitWorktrees(target.repoPath, target.baseBranch);
   const { runsDir } = options;
-  const specPath = (task: Task) => `odd/tasks/factory-${task.id}.md`;
+  const specPath = (task: Task) => `flow/factory-${task.id}.md`;
   const agentCtx = { brain: target.brain, readRoots: target.readOnlyPaths };
   const source = options.text
     ? new TextTaskSource(options.text)
