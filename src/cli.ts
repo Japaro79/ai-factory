@@ -34,6 +34,7 @@ Usage:
   factory setup restore <backup id>           Undo a setup install from its backup.
   factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
+  factory gate init | run [--no-cache]         Pre-commit review of staged files against the repo rules (AGENTS.md).
   factory usage [record --agent <a> --event <e>]  Show (or record) the local usage log; nothing leaves the machine.
   factory check assess|review|confirm|mode|hook  Checkpoint: review a change at the depth its risk calls for.
                                               Run "factory check" for its options.
@@ -75,6 +76,7 @@ async function main(): Promise<number> {
       quiet: { type: "boolean", default: false },
       "no-gitignore": { type: "boolean", default: false },
       event: { type: "string" },
+      "no-cache": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "no-dashboard": { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
@@ -143,6 +145,27 @@ async function main(): Promise<number> {
     const r = await initCodegraph(values.cwd);
     (r.ok ? console.log : console.error)(r.message);
     return r.ok ? 0 : 1;
+  }
+
+  if (command === "gate") {
+    const cwd = resolve(values.cwd ?? process.cwd());
+    const gate = await import("./checkpoint/gate.ts");
+    if (positionals[1] === "init") {
+      const cli = fileURLToPath(import.meta.url);
+      const tsx = resolve(dirname(cli), "..", "node_modules", "tsx", "dist", "cli.mjs");
+      const done = await gate.initGate(cwd, ["node", tsx.replace(/\\/g, "/"), cli.replace(/\\/g, "/")]);
+      console.log(done.length ? `Gate: ${done.join(", ")}.` : "Gate: already set up.");
+      return 0;
+    }
+    if (positionals[1] === "run") {
+      const { checkModel } = await import("./checkpoint/cli.ts");
+      const { ClaudeGateReviewer } = await import("./checkpoint/claudeAgents.ts");
+      const r = await gate.runGate(cwd, new ClaudeGateReviewer(await checkModel(), cwd), { noCache: values["no-cache"] === true });
+      (r.code ? console.error : console.log)(r.message);
+      return r.code;
+    }
+    console.error("gate needs init or run [--no-cache].");
+    return 1;
   }
 
   if (command === "usage") {

@@ -4,7 +4,8 @@ The agent harness (harness/, src/harness/, src/checkpoint/) is based on Gentle A
 (https://github.com/Gentleman-Programming/gentle-ai): its rules, workflow, review flow, risk rules,
 skills, subagents and permission guards were rewritten here with our own names and tools, and some
 data (permission guard lists, risk patterns, Go test examples) was adapted from it. Those parts are
-distributed under Gentle AI's license:
+distributed under Gentle AI's license. The commit gate (src/checkpoint/gate.ts) is based on Gentleman
+Guardian Angel, also by Gentleman Programming.
 
 ----------------------------------------------------------------------
 

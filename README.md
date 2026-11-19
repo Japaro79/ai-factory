@@ -139,6 +139,10 @@ factory setup install               # install for all four agents (or --agent cl
 factory setup restore <backup id>   # undo one install
 ```
 
+**Gate** reviews what you are about to commit against the repository's own rules (its `AGENTS.md`, or the file set in
+`.factory/gate.json`). Turn it on per repository with `factory gate init`, which adds a pre-commit hook and keeps any
+hook you already had; `git commit --no-verify` skips it once.
+
 Checkpoint is also a command you can run yourself: `factory check assess` rates the current change, and
 `factory check review --lenses security,proof --reason "..." --consent yes` reviews it. See
 [harness/README.md](harness/README.md) for everything it installs.
@@ -221,6 +225,8 @@ word, so personal data cannot slip into the repo.
   the conductor rules, the skills, the subagents, the risk rules and the permission guards are our rewrite of Gentle AI's
   workflow (Organic Driven Development), receipt-driven review, Judgment Day, orchestrator, skills and guards, with our
   own names and tools. The adapted parts keep Gentle AI's MIT notice in [NOTICE](NOTICE).
+- **Gentleman Guardian Angel** by Gentleman Programming: the idea behind the commit gate (`factory gate`), rebuilt here
+  on top of Checkpoint.
 - **[Engram](https://github.com/Gentleman-Programming/engram)** by Gentleman Programming (MIT): persistent memory for
   AI agents; the inspiration for serving the factory's memory to every agent over MCP.
 - **[Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)** (MIT): the memory server.

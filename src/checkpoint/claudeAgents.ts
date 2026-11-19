@@ -24,6 +24,11 @@ const confirmSchema = z.object({
   offTopicPaths: z.array(z.string()),
 });
 
+const gateSchema = z.object({
+  status: z.enum(["passed", "failed"]),
+  violations: z.array(z.object({ location: z.string(), rule: z.string(), issue: z.string() })),
+});
+
 const asset = (path: string) => readFileSync(join(HARNESS_DIR, "checkpoint", path), "utf8");
 
 /** Neutralizes every spelling of the closing tag (case, spaces), so data can never close its own block. */
@@ -97,6 +102,37 @@ export class ClaudeCheckAgents implements CheckAgents {
       allowedTools: [],
       readRoots: [],
       schema: confirmSchema,
+    });
+    return r.output;
+  }
+}
+
+/** The commit gate's reviewer: a tool-free Claude agent that sees only the rules and the staged diff. */
+export class ClaudeGateReviewer {
+  constructor(
+    private readonly settings: AgentSettings,
+    private readonly cwd: string,
+  ) {}
+
+  async review(input: { rules: string; patch: string; paths: string[] }) {
+    const r = await runAgent({
+      prompt: [
+        "<rules>",
+        escapeClosing(input.rules, "rules"),
+        "</rules>",
+        "",
+        `Files under review: ${input.paths.join(", ")}`,
+        "",
+        "<change>",
+        escapeClosing(input.patch, "change"),
+        "</change>",
+      ].join("\n"),
+      systemAppend: asset("gate.md"),
+      cwd: this.cwd,
+      settings: this.settings,
+      allowedTools: [],
+      readRoots: [],
+      schema: gateSchema,
     });
     return r.output;
   }

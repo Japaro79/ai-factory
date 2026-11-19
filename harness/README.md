@@ -21,7 +21,7 @@ are our own rewrite of its ideas, with our own names and the factory's own tools
 
 | `rules/checkpoint.md` | How and when to run a Checkpoint review |
 | `rules/agent-basics.md` | Artifact language rule appended to every subagent |
-| `checkpoint/` | Checkpoint reviewer, lens, challenger and confirmer prompts |
+| `checkpoint/` | Checkpoint reviewer, lens, challenger and confirmer prompts, and the commit gate prompt |
 | `skills/` | Skills, with shared references in `skills/_common/` |
 | `agents/` | Subagents: `factory-explorer`, `factory-verifier`, `factory-builder`, `crossfire-a`, `crossfire-b`, `crossfire-fixer` (the `check-*` agents are built from `checkpoint/`) |
 | `guard/` | Permission guards: sensitive files and destructive commands |

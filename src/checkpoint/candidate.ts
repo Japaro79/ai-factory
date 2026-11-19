@@ -30,6 +30,8 @@ export interface FreezeOptions {
   baseRef?: string;
   /** Review only committed work (base..HEAD), ignoring uncommitted edits. */
   committedOnly?: boolean;
+  /** Review only what is staged in the index (for the pre-commit gate), ignoring unstaged edits. */
+  staged?: boolean;
 }
 
 /**
@@ -118,7 +120,12 @@ export async function freezeCandidate(cwd: string, options: FreezeOptions = {}):
   const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
   const baseRef = options.baseRef ?? "HEAD";
   const baseTree = (await git(root, ["rev-parse", `${baseRef}^{tree}`])).trim();
-  const candidateTree = options.committedOnly ? (await git(root, ["rev-parse", "HEAD^{tree}"])).trim() : await workingTree(root);
+  // write-tree only stores tree objects; it never changes the index or the files.
+  const candidateTree = options.committedOnly
+    ? (await git(root, ["rev-parse", "HEAD^{tree}"])).trim()
+    : options.staged
+      ? (await git(root, ["write-tree"])).trim()
+      : await workingTree(root);
 
   const diff = (...args: string[]) =>
     git(root, ["-c", "core.quotePath=false", "diff", "--no-color", "--no-ext-diff", "--no-textconv", "--no-renames", ...args, baseTree, candidateTree]);
