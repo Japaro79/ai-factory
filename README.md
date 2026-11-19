@@ -126,6 +126,23 @@ where the last one stopped:
   into your `~/.claude/CLAUDE.md` (or your agent's equivalent) so it loads context at the start, saves as it works and
   writes a summary at the end.
 
+## Agent harness
+
+The factory also sets up the coding agents you work with by hand (Claude Code, Codex, OpenCode and Antigravity) so they
+follow the same way of working: short evidence-first answers, the **Build Flow** workflow, delegation only for a named
+reason, **Checkpoint** reviews of high-risk changes, **Crossfire** dual reviews on request, shared skills and subagents,
+and the shared memory.
+
+```bash
+factory setup install --dry-run     # see every file it would change
+factory setup install               # install for all four agents (or --agent claude-code,codex)
+factory setup restore <backup id>   # undo one install
+```
+
+Checkpoint is also a command you can run yourself: `factory check assess` rates the current change, and
+`factory check review --lenses security,proof --reason "..." --consent yes` reviews it. See
+[harness/README.md](harness/README.md) for everything it installs.
+
 ## Where your data lives
 
 The repository holds only the factory. Everything about *your* projects stays on your machine:
@@ -140,6 +157,12 @@ The repository holds only the factory. Everything about *your* projects stays on
 | Global technical memory | `~/.ai-factory/memory/lessons.jsonl` (served to other agents by `factory mcp`) |
 | Session memory of each project | `~/.ai-factory/memory/notes.db` (served by `factory mcp`) |
 | Location of this checkout (for launchers) | `~/.ai-factory/home` |
+| Your own rules for the harness | `~/.ai-factory/harness/personal.md` |
+| Harness settings (models per subagent, Checkpoint model) | `~/.ai-factory/harness.json` |
+| Backups taken before every `setup install` write | `~/.ai-factory/backups/<id>/` |
+| Checkpoint switch (global) | `~/.ai-factory/check.json`; per repository and seals in `<repo>/.git/factory-check/` |
+| Skill index of a project | `<repo>/.factory/skills.md` |
+| Local usage log | `~/.ai-factory/usage.jsonl` |
 
 ## Project config
 
@@ -193,9 +216,11 @@ word, so personal data cannot slip into the repo.
 
 ## Credits
 
-- **[Gentle AI](https://github.com/Gentleman-Programming/gentle-ai)** by Gentleman Programming (MIT): the agent
-  harness used to build this factory. Its Organic-Driven Development workflow and feature-document convention
-  shaped how the factory documents tasks in each project.
+- **[Gentle AI](https://github.com/Gentleman-Programming/gentle-ai)** by Gentleman Programming (MIT): the agent harness
+  this factory was built with, and the base of our own [harness](harness/README.md). Build Flow, Checkpoint, Crossfire,
+  the conductor rules, the skills, the subagents, the risk rules and the permission guards are our rewrite of Gentle AI's
+  workflow (Organic Driven Development), receipt-driven review, Judgment Day, orchestrator, skills and guards, with our
+  own names and tools. The adapted parts keep Gentle AI's MIT notice in [NOTICE](NOTICE).
 - **[Engram](https://github.com/Gentleman-Programming/engram)** by Gentleman Programming (MIT): persistent memory for
   AI agents; the inspiration for serving the factory's memory to every agent over MCP.
 - **[Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)** (MIT): the memory server.
@@ -203,7 +228,8 @@ word, so personal data cannot slip into the repo.
   inspiration for the pipeline (spec writer, builder, four reviewers, approver, risk check).
 - **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)** by Anthropic: runs every agent.
 
-No code from these projects is copied here; they are credited for the ideas and tools this work builds on.
+Apart from the Gentle AI parts listed in [NOTICE](NOTICE), no code from these projects is copied here; they are credited
+for the ideas and tools this work builds on.
 
 ## License
 
