@@ -102,10 +102,18 @@ const SEVERE = new Set(["blocker", "critical"]);
 export const MAX_PATCH_CHARS = 300_000;
 
 async function runLenses(agents: CheckAgents, lenses: LensName[], candidate: Candidate, reason: string): Promise<LensResult[] | string> {
+  // A lens that throws or inspects only part of the change gets one retry; one lens failing never discards the others.
+  const attempt = (lens: LensName): Promise<LensResult> =>
+    agents.review(lens, { candidate, reason }).catch((error: unknown) => ({
+      lens,
+      complete: false,
+      findings: [],
+      inspected: `the reviewer failed: ${error instanceof Error ? error.message : String(error)}`,
+    }));
   const results = await Promise.all(
     lenses.map(async (lens) => {
-      const first = await agents.review(lens, { candidate, reason });
-      return first.complete ? first : agents.review(lens, { candidate, reason }); // one retry for an incomplete inspection
+      const first = await attempt(lens);
+      return first.complete ? first : attempt(lens);
     }),
   );
   const incomplete = results.filter((r) => !r.complete).map((r) => r.lens);
@@ -187,13 +195,14 @@ export async function review(
 export async function confirm(cwd: string, store: CheckStore, agents: CheckAgents): Promise<ReviewOutcome> {
   const open = await store.openCorrection<OpenCorrection>();
   if (!open) throw new Error("There is no correction waiting; run factory check review first.");
-  // One correction only: whatever happens below, this correction is used up.
-  await store.setOpenCorrection(undefined);
+  // One correction only: it is used up once this call reaches an outcome. A crash or a failed confirmer before that
+  // keeps it open, so a transient error never costs the user their correction.
   const corrected = await freezeCandidate(cwd, open.options);
   const base = { identity: corrected.identity, lenses: open.lenses, corrects: open.identity, advisories: open.advisories };
   const correction = await diffTrees(corrected.root, open.candidateTree, corrected.candidateTree);
-  if (correction.lines === 0) return { ...base, outcome: "needs_decision", blockers: open.blockers, message: "Nothing changed since the review; the blockers are still open." };
+  if (correction.lines === 0) return { ...base, outcome: "needs_decision", blockers: open.blockers, message: "Nothing changed since the review; the blockers are still open. Fix them, then run factory check confirm again." };
   if (correction.lines > open.budget) {
+    await store.setOpenCorrection(undefined);
     return {
       ...base,
       outcome: "needs_decision",
@@ -202,6 +211,7 @@ export async function confirm(cwd: string, store: CheckStore, agents: CheckAgent
     };
   }
   const verdict = await agents.confirm(open.blockers, { corrected, correctionPatch: correction.patch });
+  await store.setOpenCorrection(undefined);
   const failing = open.blockers.filter((b) => verdict.results.find((r) => r.id === b.id)?.outcome !== "fixed");
   if (failing.length || !verdict.onTopic) {
     return {

@@ -21,7 +21,7 @@ export interface Candidate {
   /** sha256 of the base and candidate trees: the same content always gets the same identity. */
   identity: string;
   changes: FileChange[];
-  /** Unified diff from base to candidate. */
+  /** Unified diff from base to candidate, with the content of sensitive files withheld. */
   patch: string;
 }
 
@@ -50,18 +50,51 @@ async function workingTree(root: string): Promise<string> {
   }
 }
 
-function parseAddedLines(patch: string): Map<string, string[]> {
-  const added = new Map<string, string[]>();
-  let current: string | undefined;
-  for (const line of patch.split("\n")) {
-    if (line.startsWith("+++ ")) {
-      current = line === "+++ /dev/null" ? undefined : line.slice(6);
-      if (current !== undefined && !added.has(current)) added.set(current, []);
-    } else if (current !== undefined && line.startsWith("+") && !line.startsWith("+++")) {
-      added.get(current)!.push(line.slice(1).replace(/\r$/, ""));
-    }
-  }
-  return added;
+interface PatchSection {
+  path?: string;
+  text: string;
+  added: string[];
+}
+
+/**
+ * Splits a unified diff into one section per file. Header lines are read only before the first hunk, so an added line
+ * whose content starts with "++" is never taken for a file header.
+ */
+function splitPatch(patch: string): PatchSection[] {
+  return patch
+    .split(/(?=^diff --git )/m)
+    .filter(Boolean)
+    .map((text) => {
+      let path: string | undefined;
+      let inHunk = false;
+      const added: string[] = [];
+      for (const raw of text.split("\n")) {
+        const line = raw.replace(/\r$/, "");
+        if (!inHunk) {
+          if (line.startsWith("@@")) inHunk = true;
+          else if (line.startsWith("+++ b/")) path = line.slice(6).replace(/\t$/, "");
+          else if (line.startsWith("--- a/") && path === undefined) path = line.slice(6).replace(/\t$/, "");
+          continue;
+        }
+        if (line.startsWith("@@")) continue;
+        if (line.startsWith("+")) added.push(line.slice(1));
+      }
+      return { path, text, added };
+    });
+}
+
+/** Files whose content never goes to a reviewer model: keys, certificates, env files, credentials. */
+export function isSensitivePath(path: string): boolean {
+  const lower = path.toLowerCase();
+  const name = lower.split("/").pop() ?? "";
+  return (
+    name === ".env" ||
+    name.startsWith(".env.") ||
+    /\.(pem|key|p12|pfx|keystore|jks)$/.test(name) ||
+    /^id_(rsa|dsa|ecdsa|ed25519)/.test(name) ||
+    name === "credentials" ||
+    lower.split("/").slice(0, -1).includes("secrets")
+  );
 }
 
 /** Changed lines (additions plus deletions) and the diff between two frozen trees: the size of a correction. */
@@ -81,6 +114,7 @@ export async function diffTrees(root: string, from: string, to: string): Promise
 }
 
 export async function freezeCandidate(cwd: string, options: FreezeOptions = {}): Promise<Candidate> {
+  if (options.committedOnly && !options.baseRef) throw new Error("--committed-only needs --base-ref <ref>: the commits after that ref are the change.");
   const root = (await git(cwd, ["rev-parse", "--show-toplevel"])).trim();
   const baseRef = options.baseRef ?? "HEAD";
   const baseTree = (await git(root, ["rev-parse", `${baseRef}^{tree}`])).trim();
@@ -99,7 +133,12 @@ export async function freezeCandidate(cwd: string, options: FreezeOptions = {}):
     modes.set(rawParts[i + 1]!, { oldMode: oldMode!, newMode: newMode! });
   }
 
-  const added = parseAddedLines(patch);
+  const sections = splitPatch(patch);
+  const added = new Map(sections.filter((s) => s.path !== undefined).map((s) => [s.path!, s.added]));
+  // Reviewers see the diff; sensitive files keep their header but never their content.
+  const reviewPatch = sections
+    .map((s) => (s.path && isSensitivePath(s.path) ? `${s.text.split(/\n(?=@@)/)[0]!.trimEnd()}\n(content withheld from reviewers: sensitive file)\n` : s.text))
+    .join("");
   const changes: FileChange[] = [];
   for (const entry of numstat.split("\0").filter(Boolean)) {
     const [a, d, path] = entry.split("\t");
@@ -110,7 +149,9 @@ export async function freezeCandidate(cwd: string, options: FreezeOptions = {}):
     const deletions = binary ? 0 : Number(d);
     const change: FileChange = { path, additions, deletions, addedLines: added.get(path) ?? [] };
     if (binary) change.binary = true;
-    if (mode && mode.oldMode !== "000000" && mode.newMode !== "000000" && mode.oldMode !== mode.newMode) {
+    // A new executable file (000000 -> 100755) counts as a mode change; a plain new or deleted file does not.
+    const newExecutable = mode?.oldMode === "000000" && mode.newMode === "100755";
+    if (mode && (newExecutable || (mode.oldMode !== "000000" && mode.newMode !== "000000" && mode.oldMode !== mode.newMode))) {
       change.oldMode = mode.oldMode;
       change.newMode = mode.newMode;
       if (additions + deletions === 0) change.modeOnly = true;
@@ -119,5 +160,5 @@ export async function freezeCandidate(cwd: string, options: FreezeOptions = {}):
   }
 
   const identity = createHash("sha256").update(`${baseTree}:${candidateTree}`).digest("hex");
-  return { root, baseTree, candidateTree, identity, changes, patch };
+  return { root, baseTree, candidateTree, identity, changes, patch: reviewPatch };
 }

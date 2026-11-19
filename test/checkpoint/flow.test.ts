@@ -183,3 +183,39 @@ describe("confirm", () => {
     expect(big.calls).not.toContain("confirm:1");
   });
 });
+
+describe("failures that must not lose work", () => {
+  it("a lens that throws is retried once and never discards the other lenses", async () => {
+    await highRiskChange();
+    let calls = 0;
+    const { agents: a } = agents(
+      {},
+      {
+        review: async (lens) => {
+          if (lens === "security" && calls++ === 0) throw new Error("network down");
+          return { lens, complete: true, findings: [], inspected: "all" };
+        },
+      },
+    );
+    expect((await review(repo, { lenses: ["security", "proof"], reason: "r" }, store, a)).outcome).toBe("approved");
+  });
+
+  it("a confirmer that fails keeps the correction open for another try", async () => {
+    await highRiskChange();
+    const { agents: a } = agents({ security: [finding()] });
+    await review(repo, { lenses: ["security"], reason: "r" }, store, a);
+    await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
+    const broken = agents({}, { confirm: async () => { throw new Error("timeout"); } });
+    await expect(confirm(repo, store, broken.agents)).rejects.toThrow(/timeout/);
+    expect((await confirm(repo, store, a)).outcome).toBe("approved");
+  });
+
+  it("an unchanged tree keeps the correction open instead of using it up", async () => {
+    await highRiskChange();
+    const { agents: a } = agents({ security: [finding()] });
+    await review(repo, { lenses: ["security"], reason: "r" }, store, a);
+    expect((await confirm(repo, store, a)).outcome).toBe("needs_decision");
+    await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
+    expect((await confirm(repo, store, a)).outcome).toBe("approved");
+  });
+});

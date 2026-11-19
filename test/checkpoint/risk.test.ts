@@ -84,3 +84,10 @@ describe("correctionBudget", () => {
     expect(correctionBudget(0)).toBe(0);
   });
 });
+
+describe("assessRisk on new executables", () => {
+  it("rates a new executable file high", () => {
+    const r = assessRisk([change("bin/run", ["echo hi"], { oldMode: "000000", newMode: "100755" })]);
+    expect(r.reasons).toContainEqual({ code: "executable_mode", signal: "permissions", path: "bin/run" });
+  });
+});

@@ -40,13 +40,15 @@ export async function handleHook(payload: HookPayload, options: { settings?: str
     const store = new CheckStore(root, options.settings ?? DEFAULT_GLOBAL_SETTINGS);
     const session = payload.session_id ?? "unknown";
 
+    // Cheap checks first: freezing the tree hashes every changed file, so it only runs when there is something to see.
+    const clean = (await run("git", ["status", "--porcelain"], { cwd: root })).stdout.trim() === "";
     if (event === "SessionStart") {
-      const candidate = await freezeCandidate(root);
-      await store.setSession(session, { baseline: candidate.changes.length ? candidate.identity : "" });
+      const baseline = clean ? "" : (await freezeCandidate(root)).identity;
+      await store.setSession(session, { baseline });
       return undefined;
     }
 
-    if (payload.stop_hook_active) return undefined;
+    if (payload.stop_hook_active || clean || !(await store.mode()).on) return undefined;
     const state = (await store.session(session)) ?? {};
     const a = await assess(root, {}, store);
     if (!a.mode.on || a.empty || !a.due) return undefined;

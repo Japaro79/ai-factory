@@ -84,3 +84,15 @@ describe("factory check", () => {
     expect(await checkModel(join(home, "harness.json"))).toMatchObject({ model: "claude-opus-5-5", effort: "medium" });
   });
 });
+
+describe("factory check input checks", () => {
+  it("hook stays silent on unreadable input", async () => {
+    expect(await checkCommand({ action: "hook", cwd: repo }, { settings, stdin: async () => "{not json" })).toEqual({ code: 0, output: "" });
+  });
+
+  it("mode refuses an unknown scope instead of switching globally", async () => {
+    const r = await checkCommand({ action: "mode", arg: "off", cwd: repo, scope: "rpo" }, { settings });
+    expect(r.code).toBe(1);
+    expect((await checkCommand({ action: "mode", arg: "status", cwd: repo }, { settings })).output).toBe("Checkpoint: on (decided by default)");
+  });
+});

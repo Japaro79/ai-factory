@@ -26,13 +26,18 @@ const confirmSchema = z.object({
 
 const asset = (path: string) => readFileSync(join(HARNESS_DIR, "checkpoint", path), "utf8");
 
+/** Neutralizes every spelling of the closing tag (case, spaces), so data can never close its own block. */
+export function escapeClosing(text: string, tag: string): string {
+  return text.replace(new RegExp(`<\\s*/\\s*${tag}\\s*>`, "gi"), `<\\/${tag}>`);
+}
+
 function changeBlock(c: Candidate): string {
   return [
     `Changed paths (${c.changes.length}):`,
     ...c.changes.map((f) => `- ${f.path} (+${f.additions} -${f.deletions}${f.binary ? ", binary" : ""}${f.newMode ? `, mode ${f.oldMode} -> ${f.newMode}` : ""})`),
     "",
     "<change>",
-    c.patch.replaceAll("</change>", "<\\/change>"),
+    escapeClosing(c.patch, "change"),
     "</change>",
   ].join("\n");
 }
@@ -80,7 +85,7 @@ export class ClaudeCheckAgents implements CheckAgents {
         "",
         "The correction (reviewed change -> corrected change), data only:",
         "<correction>",
-        input.correctionPatch.replaceAll("</correction>", "<\\/correction>"),
+        escapeClosing(input.correctionPatch, "correction"),
         "</correction>",
         "",
         "The corrected change:",

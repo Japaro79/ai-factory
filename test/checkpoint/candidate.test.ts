@@ -93,3 +93,33 @@ describe("CheckStore", () => {
     expect(git("status", "--porcelain")).toBe("");
   });
 });
+
+describe("freezeCandidate edge cases", () => {
+  it("never takes an added line that starts with ++ for a file header", async () => {
+    await writeFile(join(repo, "a.ts"), "export const a = 1;\n++counter;\n+++ b/fake.ts\n");
+    const c = await freezeCandidate(repo);
+    expect(c.changes.map((x) => x.path)).toEqual(["a.ts"]);
+    expect(c.changes[0]!.addedLines).toEqual(["++counter;", "+++ b/fake.ts"]);
+  });
+
+  it("withholds the content of sensitive files from reviewers but still assesses their path", async () => {
+    await writeFile(join(repo, ".env"), "API_TOKEN=super-secret-value\n");
+    const c = await freezeCandidate(repo);
+    expect(c.changes.map((x) => x.path)).toContain(".env");
+    expect(c.patch).not.toContain("super-secret-value");
+    expect(c.patch).toContain("content withheld from reviewers");
+  });
+
+  it("refuses a committed-only review without a base ref instead of reviewing nothing", async () => {
+    await expect(freezeCandidate(repo, { committedOnly: true })).rejects.toThrow(/base-ref/);
+  });
+
+  it("reports a new executable file as a mode change", async () => {
+    await writeFile(join(repo, "run"), "#!/bin/sh\necho hi\n");
+    git("add", "run");
+    git("update-index", "--chmod=+x", "run");
+    git("commit", "-q", "-m", "exe");
+    const c = await freezeCandidate(repo, { baseRef: "HEAD~1", committedOnly: true });
+    expect(c.changes[0]).toMatchObject({ path: "run", oldMode: "000000", newMode: "100755" });
+  });
+});

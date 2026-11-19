@@ -73,15 +73,21 @@ export async function checkCommand(args: CheckArgs, deps: CheckDeps = {}): Promi
   try {
     switch (args.action) {
       case "hook": {
-        const payload = JSON.parse((await (deps.stdin ?? readStdin)()) || "{}");
-        const out = await handleHook(payload, { settings });
+        // A hook must never break a session: unreadable input is silent, like every other hook failure.
+        let payload: unknown;
+        try {
+          payload = JSON.parse((await (deps.stdin ?? readStdin)()) || "{}");
+        } catch {
+          return { code: 0, output: "" };
+        }
+        const out = await handleHook((payload ?? {}) as Parameters<typeof handleHook>[0], { settings });
         return { code: 0, output: out ? JSON.stringify(out) : "" };
       }
       case "mode": {
         const store = new CheckStore(args.cwd, settings);
+        if (args.scope !== undefined && args.scope !== "global" && args.scope !== "repo") return fail("--scope takes global or repo.");
         if (args.arg === "on" || args.arg === "off") {
-          const scope = args.scope === "repo" ? "repo" : "global";
-          await store.setMode(args.arg, scope);
+          await store.setMode(args.arg, args.scope === "repo" ? "repo" : "global");
         } else if (args.arg !== "status" && args.arg !== undefined) {
           return fail("mode takes on, off or status.");
         }
