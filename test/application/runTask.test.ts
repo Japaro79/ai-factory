@@ -10,6 +10,9 @@ import {
   RecordingBuilder,
   ScriptedChecks,
   ScriptedReviewer,
+  FakeMemory,
+  FakeLessonWriter,
+  known,
   passing,
   task,
   spec,
@@ -129,6 +132,51 @@ describe("runTask", () => {
     const hot = { ...spec, riskNotes: [{ text: "Changes medication reminder timing.", escalate: true }, { text: "Copy only.", escalate: false }] };
     const loud = deps({ specWriter: { write: async () => ({ output: hot, costUsd: 1, model: "fake" }) } });
     expect(await runTask(7, loud, settings)).toMatchObject({ risk: { level: "high", reasons: ["escalated: Changes medication reminder timing."] } });
+  });
+
+  it("recalls lessons before the spec and hands them to the spec writer and the builder", async () => {
+    const memory = new FakeMemory([known]);
+    const specWriter = new FakeSpecWriter();
+    const builder = new RecordingBuilder();
+    const d = deps({ memory, specWriter, builder });
+    await runTask(7, d, { ...settings, stack: "node" });
+
+    expect(memory.queries[0]).toEqual({ text: `${task.title}\n${task.body}`, stack: "node", limit: 5 });
+    expect(specWriter.lessonsSeen).toEqual([[known]]);
+    expect(builder.lessonsSeen).toEqual([[known]]);
+    expect(d.audit.events.map((e) => e.step).slice(0, 4)).toEqual(["intake", "workspace", "recall", "spec"]);
+    expect(d.audit.events.find((e) => e.step === "recall")).toMatchObject({ outcome: "ok", detail: { lessons: [known.title] } });
+  });
+
+  it("learns from a costly run: rejected rounds become generic lessons saved with their source", async () => {
+    const security = new ScriptedReviewer("security", [
+      { lens: "security", summary: "bad", findings: [{ severity: "blocker", file: "lib/a.dart", message: "leaks PIN" }] },
+      { lens: "security", summary: "ok", findings: [] },
+    ]);
+    const memory = new FakeMemory();
+    const lessonWriter = new FakeLessonWriter([{ ...known, source: undefined } as never]);
+    const d = deps({ memory, lessonWriter, reviewers: [security, passing("ux"), passing("ui"), passing("code")] });
+    const outcome = await runTask(7, d, { ...settings, stack: "node", projectName: "shop" });
+
+    expect(lessonWriter.inputs[0]!.failures).toEqual(["[security] blocker lib/a.dart: leaks PIN"]);
+    expect(memory.saved).toEqual([{ ...known, source: "shop/issue-7" }]);
+    expect(d.audit.events.find((e) => e.step === "lessons")).toMatchObject({ outcome: "ok", detail: { saved: [known.title] } });
+    expect(outcome).toMatchObject({ status: "pr-opened", approved: true, rounds: 2 });
+  });
+
+  it("does not ask for lessons when the first round is approved", async () => {
+    const lessonWriter = new FakeLessonWriter([known]);
+    await runTask(7, deps({ memory: new FakeMemory(), lessonWriter }), settings);
+    expect(lessonWriter.inputs).toHaveLength(0);
+  });
+
+  it("never fails a task because the memory is down", async () => {
+    const checks = new ScriptedChecks([{ passed: false, output: "boom" }, { passed: true, output: "ok" }]);
+    const d = deps({ memory: new FakeMemory([], true), lessonWriter: new FakeLessonWriter([known]), checks });
+    const outcome = await runTask(7, d, settings);
+    expect(outcome).toMatchObject({ status: "pr-opened", approved: true });
+    expect(d.audit.events.find((e) => e.step === "recall")).toMatchObject({ outcome: "error" });
+    expect(d.audit.events.find((e) => e.step === "lessons")).toMatchObject({ outcome: "error" });
   });
 
   it("treats a crashed reviewer as a missing verdict, not as approval", async () => {

@@ -1,9 +1,11 @@
 #!/usr/bin/env -S npx tsx
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { ClaudeBuilder, ClaudeReviewer, ClaudeSpecWriter } from "./adapters/claudeAgents.ts";
+import { ClaudeBuilder, ClaudeLessonWriter, ClaudeReviewer, ClaudeSpecWriter } from "./adapters/claudeAgents.ts";
+import { EngramMemory } from "./adapters/engramMemory.ts";
+import { JsonlMemory, MirroredMemory } from "./adapters/memory.ts";
 import { GitHubCli } from "./adapters/githubCli.ts";
 import { GitWorktrees } from "./adapters/gitWorktrees.ts";
 import { FilePublisher, LocalTaskSource, NoPushWorkspaces, ReadOnlySource } from "./adapters/dryRun.ts";
@@ -14,6 +16,7 @@ import { FACTORY_HOME, ProjectRegistry, runsDirFor } from "./adapters/projectReg
 import { TextTaskSource } from "./adapters/textTaskSource.ts";
 import { ensureDashboard, systemDashboardDeps } from "./adapters/dashboardLauncher.ts";
 import { ShellChecks } from "./adapters/shellChecks.ts";
+import type { Memory } from "./application/ports.ts";
 import { runTask, type FactoryDeps, type FactorySettings } from "./application/runTask.ts";
 import { loadConfig, type FactoryConfig } from "./config.ts";
 import { startDashboard } from "./dashboard/server.ts";
@@ -47,6 +50,15 @@ interface WireOptions {
   taskFile?: string;
   text?: string;
   runsDir: string;
+  /** Project name recorded as the source of lessons; defaults to the repo folder name. */
+  projectName?: string;
+}
+
+/** The global memory: the factory's own store, mirrored into Engram when enabled. */
+function memoryFor(config: FactoryConfig): Memory | undefined {
+  if (!config.memory.enabled) return undefined;
+  const own = new JsonlMemory();
+  return config.memory.engram ? new MirroredMemory(own, new EngramMemory()) : own;
 }
 
 function wire(config: FactoryConfig, options: WireOptions): { deps: FactoryDeps; settings: FactorySettings } {
@@ -73,12 +85,16 @@ function wire(config: FactoryConfig, options: WireOptions): { deps: FactoryDeps;
       builder: new ClaudeBuilder(config.builder, agentCtx, config.builder.allowedBash, specPath),
       reviewers: REVIEW_LENSES.map((lens) => new ClaudeReviewer(lens, config.reviewers[lens], agentCtx)),
       audit: new JsonlAudit(runsDir),
+      memory: memoryFor(config),
+      lessonWriter: config.memory.enabled ? new ClaudeLessonWriter(config.memory.lessonWriter) : undefined,
     },
     settings: {
       maxRounds: config.limits.maxRounds,
       maxCostUsd: config.limits.maxCostUsd,
       specPath,
       riskRules: config.risk,
+      stack: target.stack,
+      projectName: options.projectName ?? basename(target.repoPath),
     },
   };
 }
@@ -171,7 +187,7 @@ async function main(): Promise<number> {
       for (const p of projects) {
         console.log(`— ${p.name}`);
         const config = await loadConfig(p.configPath);
-        const { deps, settings } = wire(config, { dryRun: values["dry-run"] === true, runsDir: runsDirFor(p.configPath) });
+        const { deps, settings } = wire(config, { dryRun: values["dry-run"] === true, runsDir: runsDirFor(p.configPath), projectName: p.name });
         code = Math.max(code, await pollOnce(deps, settings, config.intake.label));
       }
       return code;

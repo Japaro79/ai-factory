@@ -1,9 +1,26 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { AgentFailure, type AgentResult, type Builder, type Reviewer, type SpecWriter, type Workspace } from "../application/ports.ts";
-import type { BuildReport, ReviewLens, ReviewVerdict, Spec, Task } from "../domain/types.ts";
+import {
+  AgentFailure,
+  type AgentResult,
+  type Builder,
+  type LessonWriter,
+  type Reviewer,
+  type SpecWriter,
+  type Workspace,
+} from "../application/ports.ts";
+import type { BuildReport, Lesson, ReviewLens, ReviewVerdict, Spec, Task } from "../domain/types.ts";
 import { guardHooks } from "./toolGuard.ts";
-import { builderPrompt, reviewerPrompt, specWriterPrompt, SYSTEM_BUILDER, SYSTEM_REVIEWER, SYSTEM_SPEC_WRITER } from "./prompts.ts";
+import {
+  builderPrompt,
+  lessonWriterPrompt,
+  reviewerPrompt,
+  specWriterPrompt,
+  SYSTEM_BUILDER,
+  SYSTEM_LESSON_WRITER,
+  SYSTEM_REVIEWER,
+  SYSTEM_SPEC_WRITER,
+} from "./prompts.ts";
 
 export interface AgentSettings {
   model: string;
@@ -26,6 +43,20 @@ const buildSchema = z.object({
   summary: z.string(),
   testsAdded: z.array(z.string()),
   blocked: z.string().optional(),
+});
+
+const lessonsSchema = z.object({
+  lessons: z
+    .array(
+      z.object({
+        title: z.string().min(1),
+        problem: z.string().min(1),
+        fix: z.string().min(1),
+        stack: z.string().min(1),
+        tags: z.array(z.string()),
+      }),
+    )
+    .max(2),
 });
 
 const verdictSchema = z.object({
@@ -96,9 +127,9 @@ export interface AgentContext {
 export class ClaudeSpecWriter implements SpecWriter {
   constructor(private readonly settings: AgentSettings, private readonly ctx: AgentContext) {}
 
-  write(task: Task, ws: Workspace): Promise<AgentResult<Spec>> {
+  write(task: Task, ws: Workspace, lessons: Lesson[] = []): Promise<AgentResult<Spec>> {
     return runAgent({
-      prompt: specWriterPrompt(task, this.ctx.brain),
+      prompt: specWriterPrompt(task, this.ctx.brain, lessons),
       systemAppend: SYSTEM_SPEC_WRITER,
       cwd: ws.path,
       settings: this.settings,
@@ -126,6 +157,23 @@ export class ClaudeBuilder implements Builder {
       allowedTools: [...EDIT_TOOLS, ...this.allowedBash],
       readRoots: this.ctx.readRoots,
       schema: buildSchema,
+    });
+  }
+}
+
+/** Writes generic lessons from a costly run. No tools: it only reads what it is given. */
+export class ClaudeLessonWriter implements LessonWriter {
+  constructor(private readonly settings: AgentSettings) {}
+
+  write(input: { task: Task; spec: Spec; failures: string[]; stack: string }, cwd: string = process.cwd()) {
+    return runAgent({
+      prompt: lessonWriterPrompt(input),
+      systemAppend: SYSTEM_LESSON_WRITER,
+      cwd,
+      settings: this.settings,
+      allowedTools: [],
+      readRoots: [],
+      schema: lessonsSchema,
     });
   }
 }

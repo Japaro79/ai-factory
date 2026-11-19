@@ -5,15 +5,18 @@ import type {
   Builder,
   CheckResult,
   CheckRunner,
+  LessonWriter,
+  Memory,
   PullRequestInput,
   PullRequestPublisher,
+  RecallQuery,
   Reviewer,
   SpecWriter,
   TaskSource,
   Workspace,
   WorkspaceManager,
 } from "../../src/application/ports.ts";
-import type { BuildReport, DiffSummary, ReviewLens, ReviewVerdict, Spec, Task } from "../../src/domain/types.ts";
+import type { BuildReport, DiffSummary, Lesson, ReviewLens, ReviewVerdict, Spec, Task } from "../../src/domain/types.ts";
 
 export const task: Task = {
   id: "issue-7",
@@ -79,18 +82,55 @@ export class ScriptedChecks implements CheckRunner {
 }
 
 export class FakeSpecWriter implements SpecWriter {
+  lessonsSeen: Lesson[][] = [];
   constructor(private cost = 1) {}
-  async write() {
+  async write(_task: Task, _ws: Workspace, lessons: Lesson[] = []) {
+    this.lessonsSeen.push(lessons);
     return result(spec, this.cost);
   }
 }
 
 export class RecordingBuilder implements Builder {
   feedbackPerRound: string[][] = [];
+  lessonsSeen: Lesson[][] = [];
   constructor(private cost = 1, private report: BuildReport = { summary: "done", testsAdded: ["test/a_test.dart"] }) {}
-  async build(input: { feedback: string[] }) {
+  async build(input: { feedback: string[]; lessons?: Lesson[] }) {
     this.feedbackPerRound.push(input.feedback);
+    this.lessonsSeen.push(input.lessons ?? []);
     return result(this.report, this.cost);
+  }
+}
+
+export const known: Lesson = {
+  title: "Run the formatter before the analyzer",
+  problem: "The analyzer failed on formatting issues the builder never saw.",
+  fix: "Run the formatter as part of the build round.",
+  stack: "node",
+  tags: ["format", "lint"],
+  source: "other/issue-1",
+};
+
+export class FakeMemory implements Memory {
+  saved: Lesson[] = [];
+  queries: RecallQuery[] = [];
+  constructor(private readonly found: Lesson[] = [], private readonly broken = false) {}
+  async save(l: Lesson) {
+    if (this.broken) throw new Error("memory down");
+    this.saved.push(l);
+  }
+  async recall(q: RecallQuery) {
+    this.queries.push(q);
+    if (this.broken) throw new Error("memory down");
+    return this.found;
+  }
+}
+
+export class FakeLessonWriter implements LessonWriter {
+  inputs: Array<{ failures: string[] }> = [];
+  constructor(private readonly lessons: Omit<Lesson, "source">[] = []) {}
+  async write(input: { failures: string[] }) {
+    this.inputs.push(input);
+    return result({ lessons: this.lessons }, 0.1);
   }
 }
 

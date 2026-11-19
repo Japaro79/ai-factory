@@ -12,8 +12,8 @@ request ─► worktree ─► spec ─► build (TDD) ─► checks ─► 4 re
 It works on any repository: it detects the stack (Node, Flutter, Go, Rust, Python) and writes a per-project config
 with the right checks and risk rules. A live local dashboard shows every run of every project.
 
-> **Status.** The issue/text pipeline is working and in daily use. Next on the roadmap: a global technical memory
-> shared across projects, and building new apps from an idea (plan → approve → build by phases). See [Roadmap](#roadmap).
+> **Status.** The issue/text pipeline and the global technical memory are working. Next on the roadmap: building
+> new apps from an idea (plan → approve → build by phases). See [Roadmap](#roadmap).
 
 ## How it works
 
@@ -76,6 +76,25 @@ factory dashboard [--port 4747]                               live dashboard ove
 
 `run` and `poll` also start the dashboard in the background unless one is already running (`--no-dashboard` to skip).
 
+## Global technical memory
+
+What one project learned the hard way should never cost hours again in another. The factory keeps a memory of
+**technical lessons only** (library and platform gotchas, testing pitfalls, recurring bug patterns, tool and store
+requirements), never what an app does.
+
+- **Recall.** Before the spec, the factory searches the memory with the task text and the project's stack and gives the
+  relevant lessons to the spec writer and the builder as hints.
+- **Learn.** When a task needed extra rounds (failing checks, blocker or major findings), a small agent with no tools
+  turns those failures into at most two generic lessons and saves them with their source (`project/task`). A
+  first-round approval teaches nothing and costs nothing.
+- **Storage.** The factory's own append-only store (`~/.ai-factory/memory/lessons.jsonl`) is the source of truth.
+  When `memory.engram` is on, lessons are mirrored into [Engram](https://github.com/Gentleman-Programming/engram) as
+  global learnings, so your other agents see them too. If Engram is missing or fails, the factory keeps working on its
+  own store; contract tests run the real `engram` binary in a throwaway data dir to catch CLI changes early.
+- **Never in the way.** Memory errors are audited (`recall`, `lessons` steps) and never fail a task.
+
+Turn it off per project with `"memory": { "enabled": false }`, or keep only the own store with `"engram": false`.
+
 ## Where your data lives
 
 The repository holds only the factory. Everything about *your* projects stays on your machine:
@@ -87,13 +106,15 @@ The repository holds only the factory. Everything about *your* projects stays on
 | Config kept outside a repo | anywhere, e.g. `~/.ai-factory/projects/<name>.json`, registered with `add --config` |
 | Run history | `<repo>/.factory/runs/` (add it to that repo's `.gitignore`), or `~/.ai-factory/runs/<name>/` for configs kept outside |
 | Spec of each task | `<repo>/odd/tasks/factory-<task id>.md`, committed in the task's PR |
+| Global technical memory | `~/.ai-factory/memory/lessons.jsonl` (+ Engram project `ai-factory`, global scope) |
 | Location of this checkout (for launchers) | `~/.ai-factory/home` |
 
 ## Project config
 
 `factory add` / `init` infer it from the repo; every field can be edited:
 
-- `target`: GitHub repo, base branch, `brain` (docs the agents must read first), `readOnlyPaths` (e.g. package caches agents may read, never write).
+- `target`: GitHub repo, base branch, `stack`, `brain` (docs the agents must read first), `readOnlyPaths` (e.g. package caches agents may read, never write).
+- `memory`: `enabled`, `engram` (mirror into Engram), `lessonWriter` (model of the agent that writes lessons).
 - `checks.commands`: what must exit 0 after every build round.
 - `specWriter`, `builder`, `reviewers.*`: model, effort and turn limit per role; `builder.allowedBash` is the shell allowlist.
 - `limits`: `maxRounds`, `maxCostUsd` (estimated, at API list prices).
@@ -131,9 +152,7 @@ word, so personal data cannot slip into the repo.
 
 ## Roadmap
 
-1. **Global technical memory**: lessons learned the hard way (bugs, library and platform gotchas) captured once and
-   recalled before planning and building in every project. Pluggable backend ([Engram](https://github.com/Gentleman-Programming/engram)
-   first) with a local append-only mirror the factory owns.
+1. ~~**Global technical memory**~~: done, see [Global technical memory](#global-technical-memory).
 2. **Planner**: from an app idea (and only "PC, mobile or both") to a plan with stack, screens, data and phases that you iterate and approve.
 3. **Project creation**: scaffold, git, private repo and initial docs from the approved plan.
 4. **Phase runner**: builds every phase, merges a phase itself only when risk is low and all reviewers approve, stops on high risk.
@@ -146,7 +165,7 @@ word, so personal data cannot slip into the repo.
   harness used to build this factory. Its Organic-Driven Development workflow and feature-document convention
   shaped how the factory documents tasks in each project.
 - **[Engram](https://github.com/Gentleman-Programming/engram)** by Gentleman Programming (MIT): persistent memory for
-  AI agents; the planned first backend of the global memory.
+  AI agents; the optional mirror of the global memory, used through its CLI.
 - **[RSC Harness](https://github.com/ericrisco/rsc-harness)** and Eric Risco's talk on software factories (MIT): the
   inspiration for the pipeline (spec writer, builder, four reviewers, approver, risk check).
 - **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)** by Anthropic: runs every agent.

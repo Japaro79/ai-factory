@@ -1,12 +1,14 @@
 import { decide } from "../domain/approver.ts";
 import { classifyRisk } from "../domain/riskGate.ts";
-import type { BuildReport, Decision, ReviewLens, ReviewVerdict, RiskAssessment, RiskRules, Spec, Task, TaskOutcome } from "../domain/types.ts";
+import type { BuildReport, Decision, Lesson, ReviewLens, ReviewVerdict, RiskAssessment, RiskRules, Spec, Task, TaskOutcome } from "../domain/types.ts";
 import {
   AgentFailure,
   type AgentResult,
   type AuditLog,
   type Builder,
   type CheckRunner,
+  type LessonWriter,
+  type Memory,
   type PullRequestPublisher,
   type Reviewer,
   type SpecWriter,
@@ -24,6 +26,9 @@ export interface FactoryDeps {
   reviewers: Reviewer[];
   publisher: PullRequestPublisher;
   audit: AuditLog;
+  /** Global technical memory: recalled before the spec, fed after costly runs. Optional. */
+  memory?: Memory;
+  lessonWriter?: LessonWriter;
 }
 
 export interface FactorySettings {
@@ -32,7 +37,13 @@ export interface FactorySettings {
   /** Where the task's spec is written in the project, e.g. odd/tasks/factory-<task id>.md. */
   specPath: (task: Task) => string;
   riskRules: RiskRules;
+  /** The project's stack ("node", "flutter", …), used to rank lessons. */
+  stack?: string;
+  /** Project name recorded as the source of the lessons it teaches. */
+  projectName?: string;
 }
+
+const RECALL_LIMIT = 5;
 
 class TaskFailure extends Error {}
 
@@ -80,7 +91,8 @@ export async function runTask(externalId: number, deps: FactoryDeps, settings: F
     const ws = await workspaces.create(task);
     await audit.record({ taskId: task.id, step: "workspace", outcome: "ok", detail: ws });
 
-    const spec = await agentStep("spec", () => specWriter.write(task!, ws));
+    const lessons = await recallLessons(task, deps, settings);
+    const spec = await agentStep("spec", () => specWriter.write(task!, ws, lessons));
     await workspaces.writeFile(ws, settings.specPath(task), renderSpec(task, spec));
     await workspaces.commitAll(ws, task.externalId > 0 ? `docs(spec): add factory spec for issue #${task.externalId}` : "docs(spec): add factory spec for local task");
 
@@ -89,10 +101,11 @@ export async function runTask(externalId: number, deps: FactoryDeps, settings: F
     let verdicts: ReviewVerdict[] = [];
     let report: BuildReport | undefined;
     let rounds = 0;
+    const failures: string[] = [];
 
     for (let round = 1; round <= settings.maxRounds; round++) {
       rounds = round;
-      report = await agentStep("build", () => builder.build({ task: task!, spec, feedback, round }, ws));
+      report = await agentStep("build", () => builder.build({ task: task!, spec, feedback, round, lessons }, ws));
       await workspaces.commitAll(ws, `feat: ${task.title}${issueRef(task)} [round ${round}]`);
 
       const { summary, patch } = await workspaces.diff(ws);
@@ -110,6 +123,7 @@ export async function runTask(externalId: number, deps: FactoryDeps, settings: F
       await audit.record({ taskId: task.id, step: "approval", outcome: decision.approved ? "ok" : "info", detail: decision });
       if (decision.approved) break;
       feedback = decision.feedback;
+      failures.push(...decision.feedback);
     }
 
     const { summary } = await workspaces.diff(ws);
@@ -131,6 +145,9 @@ export async function runTask(externalId: number, deps: FactoryDeps, settings: F
     await source.markStatus(task, "pr-opened");
     const verdictText = decision.approved ? "approved by reviewers" : "needs human: unresolved findings";
     await source.comment(task, `AI Factory opened ${prUrl} (risk: ${risk.level}, ${verdictText}).`);
+
+    // Only costly runs teach something: a first-round approval has nothing worth remembering.
+    if (failures.length > 0) budget.spent += await learnLessons(task, spec, failures, deps, settings);
 
     return { status: "pr-opened", prUrl, approved: decision.approved, risk, rounds, costUsd: budget.spent };
   } catch (error) {
@@ -180,6 +197,45 @@ async function runReviews(
 /** " (#12)" for GitHub issues, nothing for local tasks. */
 function issueRef(task: Task): string {
   return task.externalId > 0 ? ` (#${task.externalId})` : "";
+}
+
+/** Lessons from other projects that look relevant. A memory failure is audited and never stops the task. */
+async function recallLessons(task: Task, deps: FactoryDeps, settings: FactorySettings): Promise<Lesson[]> {
+  if (!deps.memory) return [];
+  try {
+    const lessons = await deps.memory.recall({ text: `${task.title}\n${task.body}`, stack: settings.stack ?? "any", limit: RECALL_LIMIT });
+    await deps.audit.record({ taskId: task.id, step: "recall", outcome: "ok", detail: { lessons: lessons.map((l) => l.title) } });
+    return lessons;
+  } catch (error) {
+    await deps.audit.record({ taskId: task.id, step: "recall", outcome: "error", detail: String(error) });
+    return [];
+  }
+}
+
+/**
+ * Turns the failures of a costly run into generic lessons and saves them. Runs after the PR is open, so it never
+ * delays or fails the task; its cost is reported but not charged against the task budget. Returns that cost.
+ */
+async function learnLessons(task: Task, spec: Spec, failures: string[], deps: FactoryDeps, settings: FactorySettings): Promise<number> {
+  if (!deps.memory || !deps.lessonWriter) return 0;
+  let cost = 0;
+  try {
+    const r = await deps.lessonWriter.write({ task, spec, failures, stack: settings.stack ?? "any" });
+    cost = r.costUsd;
+    const source = `${settings.projectName ?? "project"}/${task.id}`;
+    for (const lesson of r.output.lessons) await deps.memory.save({ ...lesson, source });
+    await deps.audit.record({
+      taskId: task.id,
+      step: "lessons",
+      outcome: "ok",
+      model: r.model,
+      costUsd: cost,
+      detail: { saved: r.output.lessons.map((l) => l.title) },
+    });
+  } catch (error) {
+    await deps.audit.record({ taskId: task.id, step: "lessons", outcome: "error", costUsd: cost, detail: String(error) });
+  }
+  return cost;
 }
 
 async function safely(fn: () => Promise<unknown>) {

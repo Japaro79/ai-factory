@@ -51,11 +51,20 @@ export interface CheckRunner {
 }
 
 export interface SpecWriter {
-  write(task: Task, ws: Workspace): Promise<AgentResult<Spec>>;
+  /** `lessons` are technical lessons from other projects that look relevant to this task. */
+  write(task: Task, ws: Workspace, lessons?: Lesson[]): Promise<AgentResult<Spec>>;
 }
 
 export interface Builder {
-  build(input: { task: Task; spec: Spec; feedback: string[]; round: number }, ws: Workspace): Promise<AgentResult<BuildReport>>;
+  build(
+    input: { task: Task; spec: Spec; feedback: string[]; round: number; lessons?: Lesson[] },
+    ws: Workspace,
+  ): Promise<AgentResult<BuildReport>>;
+}
+
+/** Turns what went wrong during a task into generic, reusable technical lessons (never about what the app does). */
+export interface LessonWriter {
+  write(input: { task: Task; spec: Spec; failures: string[]; stack: string }): Promise<AgentResult<{ lessons: Omit<Lesson, "source" | "createdAt">[] }>>;
 }
 
 export interface Reviewer {

@@ -19,6 +19,8 @@ export const configSchema = z.object({
     brain: z.array(z.string()).min(1),
     /** Directories agents may read but never write (package cache, SDK sources). Supports ${ENV_VAR}. */
     readOnlyPaths: z.array(z.string()).default([]),
+    /** Stack of the project ("node", "flutter", …); ranks lessons from the global memory. */
+    stack: z.string().default("any"),
   }),
   intake: z.object({
     label: z.string().default("factory"),
@@ -39,6 +41,15 @@ export const configSchema = z.object({
     ui: modelSettings,
     code: modelSettings,
   }),
+  /** Global technical memory shared by every project. */
+  memory: z
+    .object({
+      enabled: z.boolean().default(true),
+      /** Also mirror lessons into Engram (needs the engram CLI); the factory's own store is always written. */
+      engram: z.boolean().default(true),
+      lessonWriter: modelSettings.default({ model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 }),
+    })
+    .default({ enabled: true, engram: true, lessonWriter: { model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 } }),
   limits: z.object({
     maxRounds: z.number().int().min(1).max(5).default(3),
     maxCostUsd: z.number().positive().default(15),
