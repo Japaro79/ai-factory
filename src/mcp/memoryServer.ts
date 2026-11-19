@@ -4,6 +4,8 @@ import type { Memory } from "../application/ports.ts";
 import type { Lesson } from "../domain/types.ts";
 
 const MAX_LIMIT = 20;
+/** Provenance of every lesson saved through MCP; factory-learned lessons carry "project/task" instead. */
+const MCP_SOURCE = "mcp";
 
 function render(lessons: Lesson[]): string {
   return lessons
@@ -54,17 +56,17 @@ export function createMemoryServer(memory: Memory): McpServer {
         "Save a lesson after solving a problem that cost real effort and would plausibly happen again in another project. " +
         "Keep it generic and technical: never include what the app does, its data, users, names, secrets or file paths.",
       inputSchema: {
-        title: z.string().min(3).describe("Short title, e.g. 'Vitest cannot resolve paths with spaces on Windows'."),
-        problem: z.string().min(3).describe("What goes wrong and how it shows."),
-        fix: z.string().min(3).describe("What to do instead."),
-        stack: z.string().default("any").describe('Stack it applies to, or "any".'),
-        tags: z.array(z.string()).default([]).describe("A few keywords."),
-        source: z.string().default("claude-code").describe("Who learned it, e.g. 'claude-code' or 'project/task'."),
+        title: z.string().min(3).max(120).describe("Short title, e.g. 'Vitest cannot resolve paths with spaces on Windows'."),
+        problem: z.string().min(2).max(600).describe("What goes wrong and how it shows."),
+        fix: z.string().min(2).max(600).describe("What to do instead."),
+        stack: z.string().min(1).max(30).default("any").describe('Stack it applies to, or "any".'),
+        tags: z.array(z.string().min(1).max(30)).max(8).default([]).describe("A few keywords."),
       },
     },
-    async (input) => {
-      await memory.save({ ...input });
-      return { content: [{ type: "text", text: `Saved lesson: ${input.title}` }] };
+    async ({ title, problem, fix, stack, tags }) => {
+      // The source is fixed: a client cannot pass a lesson off as one the factory learned in a project.
+      await memory.save({ title, problem, fix, stack, tags, source: MCP_SOURCE });
+      return { content: [{ type: "text", text: `Saved lesson: ${title}` }] };
     },
   );
 

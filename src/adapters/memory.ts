@@ -2,7 +2,18 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { Memory, RecallQuery } from "../application/ports.ts";
 import type { Lesson } from "../domain/types.ts";
+import { z } from "zod";
 import { FACTORY_HOME } from "./projectRegistry.ts";
+
+const lessonSchema = z.object({
+  title: z.string(),
+  problem: z.string(),
+  fix: z.string(),
+  stack: z.string(),
+  tags: z.array(z.string()),
+  source: z.string(),
+  createdAt: z.string().optional(),
+});
 
 /** The factory's own lesson store: an append-only file nobody else can change under us. */
 export const DEFAULT_LESSONS_FILE = join(FACTORY_HOME, "memory", "lessons.jsonl");
@@ -47,9 +58,11 @@ export class JsonlMemory implements Memory {
       throw error;
     }
     const wanted = new Set(keywords(query.text));
+    // Anyone can append to this file (factory, MCP clients, a hand edit): one bad line must never cost the whole memory.
     const lessons = text.split("\n").filter(Boolean).flatMap((line) => {
       try {
-        return [JSON.parse(line) as Lesson];
+        const parsed = lessonSchema.safeParse(JSON.parse(line));
+        return parsed.success ? [parsed.data] : [];
       } catch {
         return [];
       }

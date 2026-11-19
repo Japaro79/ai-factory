@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -49,6 +49,16 @@ describe("JsonlMemory", () => {
     const found = await mem.recall({ text: "Tests fail on Windows because of spaces in the path", stack: "node", limit: 5 });
     expect(found.map((l) => l.title)).toEqual(["Vitest cannot resolve paths with spaces on Windows", "Windows paths in Go tests"]);
     expect(found[0]!.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("skips malformed or wrongly shaped lines instead of failing the whole recall", async () => {
+    const file = join(dir, "lessons.jsonl");
+    const mem = new JsonlMemory(file);
+    await mem.save(lesson());
+    await appendFile(file, '{"title":"half a line\n{"title":"no tags","problem":"p","fix":"f","stack":"node"}\n["not","an","object"]\nnull\n');
+    await mem.save(lesson({ title: "Windows paths in Go tests", stack: "go" }));
+    const found = await mem.recall({ text: "windows paths spaces tests", stack: "node", limit: 5 });
+    expect(found.map((l) => l.title)).toEqual(["Vitest cannot resolve paths with spaces on Windows", "Windows paths in Go tests"]);
   });
 
   it("returns nothing when there is no file or no match", async () => {

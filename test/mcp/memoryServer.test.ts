@@ -52,7 +52,7 @@ describe("ai-factory-memory MCP server", () => {
     const found = await client.callTool({ name: "lessons_search", arguments: { query: "csv export columns broken by commas", stack: "node" } });
     expect(text(found)).toContain("Quote CSV fields");
     expect(text(found)).toContain("Quote every field and escape quotes.");
-    expect(text(found)).toContain("source: claude-code");
+    expect(text(found)).toContain("source: mcp");
 
     // The factory reads the very same store.
     expect((await new JsonlMemory(file).recall({ text: "csv commas", stack: "node", limit: 5 }))[0]?.title).toBe("Quote CSV fields");
@@ -62,6 +62,23 @@ describe("ai-factory-memory MCP server", () => {
     const client = await connect(new JsonlMemory(join(dir, "lessons.jsonl")));
     const found = await client.callTool({ name: "lessons_search", arguments: { query: "kubernetes helm" } });
     expect(text(found)).toMatch(/no lessons/i);
+  });
+
+  it("bounds every field and never lets a client claim another source", async () => {
+    const file = join(dir, "lessons.jsonl");
+    const client = await connect(new JsonlMemory(file));
+    const huge = await client.callTool({
+      name: "lessons_save",
+      arguments: { title: "t".repeat(200), problem: "p", fix: "f", stack: "node", tags: [] },
+    });
+    expect(huge.isError).toBe(true);
+
+    await client.callTool({
+      name: "lessons_save",
+      arguments: { title: "Spoofed", problem: "pp", fix: "ff", source: "shop/issue-4" },
+    });
+    const [saved] = await new JsonlMemory(file).recall({ text: "spoofed", stack: "any", limit: 1 });
+    expect(saved?.source).toBe("mcp");
   });
 
   it("rejects a lesson without a fix", async () => {

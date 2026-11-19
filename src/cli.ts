@@ -96,6 +96,8 @@ function wire(config: FactoryConfig, options: WireOptions): { deps: FactoryDeps;
       riskRules: config.risk,
       stack: target.stack,
       projectName: options.projectName ?? basename(target.repoPath),
+      // A dry run may read the shared memory but never writes to it.
+      learn: !options.dryRun,
     },
   };
 }

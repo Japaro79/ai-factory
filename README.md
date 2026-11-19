@@ -96,7 +96,11 @@ requirements), never what an app does.
   ```bash
   claude mcp add --scope user ai-factory-memory -- node <factory>/node_modules/tsx/dist/cli.mjs <factory>/src/cli.ts mcp
   ```
-- **Never in the way.** Memory errors are audited (`recall`, `lessons` steps) and never fail a task.
+- **Untrusted by design.** Any agent can save lessons, so recalled lessons reach the agents fenced as data (never
+  instructions), at most five, each field clipped. `lessons_save` bounds every field and always records the source as
+  `mcp`; only the factory writes `project/task` sources. Malformed lines in the store are skipped, never fatal.
+- **Never in the way.** Memory errors are audited (`recall`, `lessons` steps) and never fail a task. A `--dry-run`
+  reads the memory but never writes to it.
 
 Turn it off per project with `"memory": { "enabled": false }`.
 

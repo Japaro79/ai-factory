@@ -41,6 +41,8 @@ export interface FactorySettings {
   stack?: string;
   /** Project name recorded as the source of the lessons it teaches. */
   projectName?: string;
+  /** Write lessons after costly runs (default true). Off for dry runs, which must leave no trace in the shared memory. */
+  learn?: boolean;
 }
 
 const RECALL_LIMIT = 5;
@@ -217,10 +219,17 @@ async function recallLessons(task: Task, deps: FactoryDeps, settings: FactorySet
  * delays or fails the task; its cost is reported but not charged against the task budget. Returns that cost.
  */
 async function learnLessons(task: Task, spec: Spec, failures: string[], deps: FactoryDeps, settings: FactorySettings): Promise<number> {
-  if (!deps.memory || !deps.lessonWriter) return 0;
+  if (!deps.memory || !deps.lessonWriter || settings.learn === false) return 0;
   let cost = 0;
   try {
-    const r = await deps.lessonWriter.write({ task, spec, failures, stack: settings.stack ?? "any" });
+    let r;
+    try {
+      r = await deps.lessonWriter.write({ task, spec, failures, stack: settings.stack ?? "any" });
+    } catch (error) {
+      // A failed agent call still spent money: report it with the failure.
+      if (error instanceof AgentFailure) cost = error.costUsd;
+      throw error;
+    }
     cost = r.costUsd;
     const source = `${settings.projectName ?? "project"}/${task.id}`;
     for (const lesson of r.output.lessons) await deps.memory.save({ ...lesson, source });

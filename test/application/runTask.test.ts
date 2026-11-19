@@ -164,6 +164,31 @@ describe("runTask", () => {
     expect(outcome).toMatchObject({ status: "pr-opened", approved: true, rounds: 2 });
   });
 
+  it("never learns when learning is off (dry runs), even after a costly run", async () => {
+    const checks = new ScriptedChecks([{ passed: false, output: "boom" }, { passed: true, output: "ok" }]);
+    const memory = new FakeMemory();
+    const lessonWriter = new FakeLessonWriter([known]);
+    const d = deps({ memory, lessonWriter, checks });
+    await runTask(7, d, { ...settings, learn: false });
+    expect(lessonWriter.inputs).toHaveLength(0);
+    expect(memory.saved).toHaveLength(0);
+    expect(memory.queries).toHaveLength(1); // recall still helps a dry run
+  });
+
+  it("counts what the lesson writer spent even when it fails", async () => {
+    const checks = new ScriptedChecks([{ passed: false, output: "boom" }, { passed: true, output: "ok" }]);
+    const lessonWriter = {
+      async write(): Promise<never> {
+        throw new AgentFailure("agent returned invalid output", 0.3);
+      },
+    };
+    const d = deps({ memory: new FakeMemory(), lessonWriter, checks });
+    const outcome = await runTask(7, d, settings);
+    // spec 1 + 2 builds + 2 x 4 reviews at 0.25 + 0.3 lost in the writer
+    expect(outcome).toMatchObject({ status: "pr-opened", costUsd: 5.3 });
+    expect(d.audit.events.find((e) => e.step === "lessons")).toMatchObject({ outcome: "error", costUsd: 0.3 });
+  });
+
   it("does not ask for lessons when the first round is approved", async () => {
     const lessonWriter = new FakeLessonWriter([known]);
     await runTask(7, deps({ memory: new FakeMemory(), lessonWriter }), settings);
