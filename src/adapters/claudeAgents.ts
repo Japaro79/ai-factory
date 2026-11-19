@@ -70,7 +70,7 @@ const verdictSchema = z.object({
   ),
 });
 
-interface RunOptions<S extends z.ZodType> {
+export interface RunOptions<S extends z.ZodType> {
   prompt: string;
   systemAppend: string;
   cwd: string;
@@ -85,7 +85,7 @@ interface RunOptions<S extends z.ZodType> {
  * - settingSources: [] keeps the factory independent of the operator's personal Claude config.
  * - permissionMode "dontAsk" denies every tool that is not explicitly allowed (no prompts, no surprises).
  */
-async function runAgent<S extends z.ZodType>(opts: RunOptions<S>): Promise<AgentResult<z.infer<S>>> {
+export async function runAgent<S extends z.ZodType>(opts: RunOptions<S>): Promise<AgentResult<z.infer<S>>> {
   let cost = 0;
   for await (const message of query({
     prompt: opts.prompt,

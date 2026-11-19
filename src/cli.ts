@@ -31,6 +31,8 @@ Usage:
   factory dashboard [--port 4747]             Live local view of the runs of every registered project.
   factory setup install [--agent a,b] [--dry-run]  Install the harness rules into Claude Code, Codex, OpenCode, Antigravity.
   factory setup restore <backup id>           Undo a setup install from its backup.
+  factory check assess|review|confirm|mode|hook  Checkpoint: review a change at the depth its risk calls for.
+                                              Run "factory check" for its options.
   factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
 
 Options:
@@ -56,6 +58,16 @@ async function main(): Promise<number> {
       text: { type: "string" },
       name: { type: "string" },
       agent: { type: "string" },
+      cwd: { type: "string" },
+      lenses: { type: "string" },
+      reason: { type: "string" },
+      "base-ref": { type: "string" },
+      "committed-only": { type: "boolean", default: false },
+      "escalate-item": { type: "string" },
+      "escalate-reason": { type: "string" },
+      consent: { type: "string" },
+      scope: { type: "string" },
+      json: { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       "no-dashboard": { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
@@ -81,6 +93,25 @@ async function main(): Promise<number> {
     const server = createMemoryServer(new JsonlMemory(), notes);
     await server.connect(new StdioServerTransport());
     return new Promise<number>(() => {}); // served until the client closes the process
+  }
+
+  if (command === "check") {
+    const { checkCommand } = await import("./checkpoint/cli.ts");
+    const { code, output } = await checkCommand({
+      action: positionals[1],
+      arg: positionals[2],
+      cwd: resolve(values.cwd ?? process.cwd()),
+      lenses: values.lenses,
+      reason: values.reason,
+      baseRef: values["base-ref"],
+      committedOnly: values["committed-only"] === true,
+      escalateItem: values["escalate-item"],
+      escalateReason: values["escalate-reason"],
+      consent: values.consent,
+      scope: values.scope,
+    });
+    if (output) (code === 1 ? console.error : console.log)(output);
+    return code;
   }
 
   if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true);
