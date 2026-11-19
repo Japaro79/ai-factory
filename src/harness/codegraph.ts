@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -19,7 +19,10 @@ const exists = (p: string) =>
     () => false,
   );
 const same = (a: string, b: string) => resolve(a).toLowerCase() === resolve(b).toLowerCase();
-const inside = (child: string, parent: string) => resolve(child).toLowerCase().startsWith(resolve(parent).toLowerCase());
+const inside = (child: string, parent: string) => {
+  const rel = relative(resolve(parent), resolve(child));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+};
 
 /**
  * `factory codegraph init --cwd <root>`: initializes CodeGraph only in the exact folder given, when it is a git root and
@@ -34,8 +37,19 @@ export async function initCodegraph(cwd: string, deps: CodegraphDeps = {}): Prom
   if (!(await exists(join(root, ".git")))) {
     return { ok: false, message: `${root} is not a git root. Initialize it first with: git -C "${root}" init` };
   }
-  const run = deps.run ?? (async (cmd: string, args: string[]) => void (await execFileAsync(cmd, args, { cwd: root, maxBuffer: 16 * 1024 * 1024 })));
-  await run("codegraph", ["init", "-y", root]);
+  // On Windows the codegraph CLI is a .cmd shim, which Node can only start through cmd.exe.
+  const run =
+    deps.run ??
+    (async (cmd: string, args: string[]) => {
+      const [file, argv] = process.platform === "win32" ? ["cmd.exe", ["/d", "/s", "/c", cmd, ...args]] : [cmd, args];
+      await execFileAsync(file, argv, { cwd: root, maxBuffer: 16 * 1024 * 1024 });
+    });
+  try {
+    await run("codegraph", ["init", "-y", root]);
+  } catch (error) {
+    const reason = (error as NodeJS.ErrnoException).code === "ENOENT" ? "the codegraph command was not found; install CodeGraph first" : String(error instanceof Error ? error.message : error);
+    return { ok: false, message: `CodeGraph could not be initialized in ${root}: ${reason}` };
+  }
 
   try {
     const exclude = resolve(root, (await execFileAsync("git", ["rev-parse", "--git-path", "info/exclude"], { cwd: root })).stdout.trim());

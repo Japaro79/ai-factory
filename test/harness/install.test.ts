@@ -153,3 +153,26 @@ describe("OpenCode permission guard merge", () => {
     expect((await json(".config/opencode/opencode.json")).permission).toBe("ask");
   });
 });
+
+describe("installer advisories", () => {
+  it("quotes agent descriptions that would break YAML", async () => {
+    await install("claude-code");
+    const text = await read(".claude/agents/check-security.md");
+    expect(text).toMatch(/\ndescription: "Checkpoint security lens: reviews/);
+  });
+
+  it("refuses to rewrite a config with comments instead of crashing or losing them", async () => {
+    await mkdir(join(home, ".config", "opencode"), { recursive: true });
+    await writeFile(join(home, ".config", "opencode", "opencode.json"), '{ // mine\n "model": "m" }\n');
+    await expect(planHarness("opencode", home, { factoryHome: factory })).rejects.toThrow(/not plain JSON/);
+  });
+
+  it("moves its own hooks to the new factory location without touching other hooks", async () => {
+    await install("claude-code");
+    await applyPlan(await planHarness("claude-code", home, { factoryHome: "/new/place" }), new Backups(join(home, "b")));
+    const stop = JSON.stringify((await json(".claude/settings.json")).hooks.Stop);
+    expect(stop).toContain("/new/place/src/cli.ts");
+    expect(stop).not.toContain(`${factory}/src/cli.ts`);
+    expect(stop.match(/check hook/g)).toHaveLength(1);
+  });
+});

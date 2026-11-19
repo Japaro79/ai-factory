@@ -46,3 +46,14 @@ describe("initCodegraph", () => {
     expect(calls).toEqual([]);
   });
 });
+
+describe("initCodegraph failures", () => {
+  it("reports a missing codegraph command instead of throwing", async () => {
+    const missing = async () => {
+      throw Object.assign(new Error("spawn codegraph ENOENT"), { code: "ENOENT" });
+    };
+    const r = await initCodegraph(repo, { run: missing, home: join(root, "home"), allowTemp: true });
+    expect(r).toMatchObject({ ok: false });
+    expect(r.message).toMatch(/not found/);
+  });
+});

@@ -310,8 +310,17 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     console.error(`Unknown agent(s): ${unknown.join(", ")}. Known: ${AGENTS.join(", ")}.`);
     return 1;
   }
+  let failed = 0;
   for (const agent of agents as (typeof AGENTS)[number][]) {
-    const plan = await planHarness(agent, homedir());
+    let plan: Awaited<ReturnType<typeof planHarness>>;
+    try {
+      plan = await planHarness(agent, homedir());
+    } catch (error) {
+      // One agent's unreadable config never blocks the others; nothing is written for this one.
+      console.error(`${agent}: skipped, nothing changed: ${error instanceof Error ? error.message : error}`);
+      failed++;
+      continue;
+    }
     if (!plan.writes.length) {
       console.log(`${agent}: up to date`);
       continue;
@@ -323,7 +332,7 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     const { backupId, changed } = await applyPlan(plan, backups);
     console.log(`${agent}: ${changed.length} file(s) changed, backup ${backupId} (undo: factory setup restore ${backupId})`);
   }
-  return 0;
+  return failed ? 1 : 0;
 }
 
 /** One poll at a time across the machine: a scheduled poll can outlast its interval. */

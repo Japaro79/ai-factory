@@ -139,7 +139,14 @@ async function fileWrite(path: string, content: string): Promise<Write[]> {
 async function jsonWrite(path: string, merge: (current: Record<string, any>) => Record<string, any>): Promise<Write[]> {
   const text = await readOrUndefined(path);
   let current: Record<string, any> = {};
-  if (text?.trim()) current = JSON.parse(text);
+  if (text?.trim()) {
+    try {
+      current = JSON.parse(text);
+    } catch {
+      // Never rewrite a file we cannot read exactly: comments or trailing commas would be lost.
+      throw new Error(`${path} is not plain JSON (comments or trailing commas?); remove them or update it by hand, then run setup again.`);
+    }
+  }
   const before = JSON.stringify(current);
   const next = merge(structuredClone(current));
   return JSON.stringify(next) === before ? [] : [{ path, content: JSON.stringify(next, null, 2) + "\n" }];
@@ -152,16 +159,25 @@ async function skillWrites(root: string, harnessDir: string): Promise<Write[]> {
   return writes;
 }
 
+/** A YAML scalar: plain when that is safe, double-quoted otherwise (for example text containing ": "). */
+function yamlValue(value: string): string {
+  return /^[A-Za-z0-9][A-Za-z0-9 ,._()/*-]*$/.test(value) && !value.includes(": ") ? value : JSON.stringify(value);
+}
+
 function markdownAgent(a: AgentDef, extra: Record<string, string>): string {
-  const meta = Object.entries({ name: a.name, description: a.description, ...extra }).map(([k, v]) => `${k}: ${v}`);
+  const meta = Object.entries({ name: a.name, description: a.description, ...extra }).map(([k, v]) => `${k}: ${yamlValue(v)}`);
   return `---\n${meta.join("\n")}\n---\n\n${a.body}\n`;
 }
 
 /** Adds one hook command under an event, unless a command with the same mark is already there. */
 function withHook(hooks: Record<string, any[]>, event: string, mark: string, entry: Record<string, unknown>): Record<string, any[]> {
   const list = hooks[event] ?? [];
-  if (JSON.stringify(list).includes(mark)) return hooks;
-  return { ...hooks, [event]: [...list, entry] };
+  const ours = list.findIndex((h) => JSON.stringify(h).includes(mark));
+  if (ours < 0) return { ...hooks, [event]: [...list, entry] };
+  // Replace our entry in place (the factory may have moved) and drop duplicates of it; other hooks stay untouched.
+  const next = list.filter((h, i) => i === ours || !JSON.stringify(h).includes(mark));
+  next[next.indexOf(list[ours])] = entry;
+  return { ...hooks, [event]: next };
 }
 
 function mergeGuardRules(current: unknown, guard: Record<string, any>): unknown {
