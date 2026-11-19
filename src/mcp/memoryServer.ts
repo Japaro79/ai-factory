@@ -1,24 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Memory } from "../application/ports.ts";
-import type { Lesson } from "../domain/types.ts";
+import { fenceLessons, MAX_FENCED_LESSONS } from "../adapters/lessonText.ts";
 
-const MAX_LIMIT = 20;
 /** Provenance of every lesson saved through MCP; factory-learned lessons carry "project/task" instead. */
 const MCP_SOURCE = "mcp";
-
-function render(lessons: Lesson[]): string {
-  return lessons
-    .map((l, i) =>
-      [
-        `${i + 1}. ${l.title}`,
-        `   problem: ${l.problem}`,
-        `   fix: ${l.fix}`,
-        `   stack: ${l.stack} · tags: ${l.tags.join(", ") || "-"} · source: ${l.source}${l.createdAt ? ` · ${l.createdAt.slice(0, 10)}` : ""}`,
-      ].join("\n"),
-    )
-    .join("\n\n");
-}
 
 /**
  * The factory's global technical memory as an MCP server, so any agent (Claude Code sessions included) shares it
@@ -38,12 +24,13 @@ export function createMemoryServer(memory: Memory): McpServer {
       inputSchema: {
         query: z.string().min(1).describe("What you are dealing with: the error message, library, tool or symptom."),
         stack: z.string().optional().describe('Project stack, e.g. "node", "flutter"; ranks matching lessons first.'),
-        limit: z.number().int().min(1).max(MAX_LIMIT).optional().describe("Maximum lessons to return (default 5)."),
+        limit: z.number().int().min(1).max(MAX_FENCED_LESSONS).optional().describe(`Maximum lessons to return (1-${MAX_FENCED_LESSONS}, default ${MAX_FENCED_LESSONS}).`),
       },
     },
     async ({ query, stack, limit }) => {
       const lessons = await memory.recall({ text: query, stack: stack ?? "any", limit: limit ?? 5 });
-      const body = lessons.length ? render(lessons) : `No lessons found for "${query}".`;
+      // Lessons are untrusted text written by any agent: hand them back through the same fence as the factory prompts.
+      const body = lessons.length ? fenceLessons(lessons, { details: true }).join("\n") : `No lessons found for "${query}".`;
       return { content: [{ type: "text", text: body }] };
     },
   );
@@ -61,12 +48,14 @@ export function createMemoryServer(memory: Memory): McpServer {
         fix: z.string().min(2).max(600).describe("What to do instead."),
         stack: z.string().min(1).max(30).default("any").describe('Stack it applies to, or "any".'),
         tags: z.array(z.string().min(1).max(30)).max(8).default([]).describe("A few keywords."),
+        source: z.string().max(200).optional().describe('Ignored: every lesson saved here is recorded with source "mcp".'),
       },
     },
-    async ({ title, problem, fix, stack, tags }) => {
+    async ({ title, problem, fix, stack, tags, source }) => {
       // The source is fixed: a client cannot pass a lesson off as one the factory learned in a project.
       await memory.save({ title, problem, fix, stack, tags, source: MCP_SOURCE });
-      return { content: [{ type: "text", text: `Saved lesson: ${title}` }] };
+      const note = source && source !== MCP_SOURCE ? ` (the source you sent was ignored; recorded as "${MCP_SOURCE}")` : "";
+      return { content: [{ type: "text", text: `Saved lesson: ${title}${note}` }] };
     },
   );
 
