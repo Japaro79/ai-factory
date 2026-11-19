@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { JsonlMemory } from "./adapters/memory.ts";
+import { projectNameFor, SqliteNotes } from "./adapters/notes.ts";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMemoryServer } from "./mcp/memoryServer.ts";
 import { acquireLock } from "./adapters/pollLock.ts";
@@ -28,7 +29,7 @@ Usage:
               [--config <path>]               Register with an existing config instead of writing one into the repo.
   factory projects                            List the registered projects.
   factory dashboard [--port 4747]             Live local view of the runs of every registered project.
-  factory mcp                                 Serve the global technical memory over MCP (stdio) to other agents.
+  factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
 
 Options:
   --project <name|path>  A registered project; uses its .factory/project.json.
@@ -65,7 +66,9 @@ async function main(): Promise<number> {
 
   if (command === "mcp") {
     // stdout belongs to the MCP protocol: nothing else may be printed in this mode.
-    await createMemoryServer(new JsonlMemory()).connect(new StdioServerTransport());
+    // The client starts this process in its session folder, so that folder names the current project.
+    const server = createMemoryServer(new JsonlMemory(), { notes: new SqliteNotes(), project: projectNameFor(process.cwd()) });
+    await server.connect(new StdioServerTransport());
     return new Promise<number>(() => {}); // served until the client closes the process
   }
 

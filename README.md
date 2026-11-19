@@ -12,7 +12,7 @@ request ─► worktree ─► spec ─► build (TDD) ─► checks ─► 4 re
 It works on any repository: it detects the stack (Node, Flutter, Go, Rust, Python) and writes a per-project config
 with the right checks and risk rules. A live local dashboard shows every run of every project.
 
-> **Status.** The issue/text pipeline and the global technical memory are working. Next on the roadmap: building
+> **Status.** The issue/text pipeline, the global technical memory and the session memory for agents are working. Next on the roadmap: building
 > new apps from an idea (plan → approve → build by phases). See [Roadmap](#roadmap).
 
 ## How it works
@@ -72,7 +72,7 @@ factory run --config <file> --task-file <task.md>             a local markdown t
 factory poll [--project <name>] [--dry-run]                   open issues labeled "factory"; all projects when none is given
 factory check-config --project <name>                         print the resolved target, checks and limits
 factory dashboard [--port 4747]                               live dashboard over every registered project
-factory mcp                                                   serve the global technical memory over MCP (stdio)
+factory mcp                                                   serve the lessons and the session memory over MCP (stdio)
 ```
 
 `run` and `poll` also start the dashboard in the background unless one is already running (`--no-dashboard` to skip).
@@ -104,6 +104,28 @@ requirements), never what an app does.
 
 Turn it off per project with `"memory": { "enabled": false }`.
 
+## Session memory for your agents
+
+The same MCP server also gives your agent sessions a memory of each project, so a new Claude Code session picks up
+where the last one stopped:
+
+| Tool | What it does |
+|------|--------------|
+| `memory_save` | Saves a note for the current project: a decision, bug fix, discovery, convention or config change. A `topic` keeps one note up to date. |
+| `memory_search` | Full-text search of the notes of this project, another one (`project`) or all of them (`all_projects`). |
+| `memory_context` | The last session summary and the most recent notes, for the start of a session or after a compaction. |
+| `memory_get` | One note in full, by id. |
+| `session_summary` | Saves what a session did, decided and left pending. |
+
+- **Current project.** The name of the git root of the folder the session runs in (the folder's own name outside
+  git), lowercased. Every tool also accepts an explicit `project`.
+- **Storage.** `~/.ai-factory/memory/notes.db`, an SQLite file (Node's built-in `node:sqlite`, no extra dependency)
+  with full-text search, safe for several sessions at once.
+- **Untrusted by design.** Notes come back fenced as data, like the lessons, and every input is bounded.
+- **Tell your agent to use it.** Tools alone are not enough: paste [examples/CLAUDE-memory.md](examples/CLAUDE-memory.md)
+  into your `~/.claude/CLAUDE.md` (or your agent's equivalent) so it loads context at the start, saves as it works and
+  writes a summary at the end.
+
 ## Where your data lives
 
 The repository holds only the factory. Everything about *your* projects stays on your machine:
@@ -116,6 +138,7 @@ The repository holds only the factory. Everything about *your* projects stays on
 | Run history | `<repo>/.factory/runs/` (add it to that repo's `.gitignore`), or `~/.ai-factory/runs/<name>/` for configs kept outside |
 | Spec of each task | `<repo>/odd/tasks/factory-<task id>.md`, committed in the task's PR |
 | Global technical memory | `~/.ai-factory/memory/lessons.jsonl` (served to other agents by `factory mcp`) |
+| Session memory of each project | `~/.ai-factory/memory/notes.db` (served by `factory mcp`) |
 | Location of this checkout (for launchers) | `~/.ai-factory/home` |
 
 ## Project config

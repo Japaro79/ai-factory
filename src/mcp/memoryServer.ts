@@ -1,7 +1,15 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Memory } from "../application/ports.ts";
-import { fenceLessons, MAX_FENCED_LESSONS } from "../adapters/lessonText.ts";
+import { clipLessonField, clipNoteBody, fenceLessons, fenceNotes, MAX_FENCED_LESSONS } from "../adapters/lessonText.ts";
+import { NOTE_TYPES, type Note, type NoteType, type SqliteNotes } from "../adapters/notes.ts";
+
+export interface MemoryServerOptions {
+  /** Per-project notes; without it the server only offers the shared lessons. */
+  notes?: SqliteNotes;
+  /** Project the session runs in, used when a tool call names none. */
+  project?: string;
+}
 
 /** Provenance of every lesson saved through MCP; factory-learned lessons carry "project/task" instead. */
 const MCP_SOURCE = "mcp";
@@ -10,7 +18,7 @@ const MCP_SOURCE = "mcp";
  * The factory's global technical memory as an MCP server, so any agent (Claude Code sessions included) shares it
  * with the factory: what one learns, every other one can recall. Same store the factory pipeline reads and writes.
  */
-export function createMemoryServer(memory: Memory): McpServer {
+export function createMemoryServer(memory: Memory, options: MemoryServerOptions = {}): McpServer {
   const server = new McpServer({ name: "ai-factory-memory", version: "0.1.0" });
 
   server.registerTool(
@@ -59,5 +67,129 @@ export function createMemoryServer(memory: Memory): McpServer {
     },
   );
 
+  if (options.notes) registerNoteTools(server, options.notes, options.project ?? "default");
   return server;
+}
+
+const SAVABLE_TYPES = NOTE_TYPES.filter((t) => t !== "session") as [Exclude<NoteType, "session">, ...Exclude<NoteType, "session">[]];
+const projectArg = z
+  .string()
+  .min(1)
+  .max(80)
+  .optional()
+  .describe("Another project's name; defaults to the project of the folder this session runs in.");
+
+const day = (iso: string) => iso.slice(0, 10);
+const noteLine = (n: Note, contentChars: number) =>
+  `- #${n.id} [${n.type}] ${clipLessonField(n.project, 80)} · ${day(n.updatedAt)}${n.topic ? ` · topic: ${clipLessonField(n.topic, 120)}` : ""} — ` +
+  `${clipLessonField(n.title, 160)}: ${clipLessonField(n.content, contentChars)}`;
+const reply = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
+
+/** Per-project memory of agent sessions: what Engram used to keep for Claude Code, in the factory's own store. */
+function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject: string): void {
+  server.registerTool(
+    "memory_save",
+    {
+      title: "Save a project note",
+      description:
+        "Save something worth remembering about THIS project for later sessions: a decision and why, a bug fix and its " +
+        "root cause, a discovery, a convention or a config change. Call it right after it happens, without being asked. " +
+        "Pass a topic to keep one note up to date (saving the same topic again replaces it). Generic lessons that would " +
+        "help any project go to lessons_save instead.",
+      inputSchema: {
+        title: z.string().min(3).max(160).describe("Short, searchable title."),
+        content: z.string().min(2).max(4000).describe("What happened, why, where (files) and what was learned."),
+        type: z.enum(SAVABLE_TYPES).describe("Kind of note."),
+        topic: z.string().min(1).max(120).optional().describe('Stable key, e.g. "architecture/auth"; same topic = same note.'),
+        project: projectArg,
+      },
+    },
+    async ({ title, content, type, topic, project }) => {
+      const target = project ?? currentProject;
+      const { id, updated } = notes.save({ project: target, type, title, content, topic });
+      return reply(`${updated ? "Updated" : "Saved"} note #${id} in project "${target}"${topic ? ` (topic ${topic})` : ""}.`);
+    },
+  );
+
+  server.registerTool(
+    "memory_search",
+    {
+      title: "Search project notes",
+      description:
+        "Search the notes of past sessions by words, in this project by default. Use it when the user mentions earlier " +
+        "work, before redoing a decision, or when a problem looks familiar. Results are summaries: use memory_get for the full note.",
+      inputSchema: {
+        query: z.string().min(1).max(300).describe("Words to look for."),
+        project: projectArg,
+        all_projects: z.boolean().optional().describe("Search every project instead of one."),
+        limit: z.number().int().min(1).max(10).optional().describe("Maximum notes (1-10, default 5)."),
+      },
+    },
+    async ({ query, project, all_projects, limit }) => {
+      const scope = all_projects ? undefined : (project ?? currentProject);
+      const found = notes.search({ query, project: scope, limit: limit ?? 5 });
+      if (!found.length) return reply(`No notes found for "${clipLessonField(query, 100)}"${scope ? ` in project "${scope}"` : ""}.`);
+      return reply(fenceNotes(found.map((n) => noteLine(n, 300))).join("\n"));
+    },
+  );
+
+  server.registerTool(
+    "memory_context",
+    {
+      title: "Recent project memory",
+      description:
+        "The last session summary and the most recent notes of this project. Call it at the start of a session and " +
+        "after a context compaction, before continuing work.",
+      inputSchema: {
+        project: projectArg,
+        limit: z.number().int().min(1).max(20).optional().describe("Maximum recent notes (1-20, default 8)."),
+      },
+    },
+    async ({ project, limit }) => {
+      const target = project ?? currentProject;
+      const session = notes.latestSession(target);
+      const recent = notes.recent({ project: target, limit: limit ?? 8 });
+      if (!session && !recent.length) return reply(`Project "${target}" has no notes yet.`);
+      const lines = [
+        `Project "${target}".`,
+        session ? `Last session summary (#${session.id}, ${day(session.updatedAt)}):\n${clipNoteBody(session.content, 2000)}` : "No session summary yet.",
+        ...(recent.length ? ["Recent notes:", ...recent.map((n) => noteLine(n, 200))] : []),
+      ];
+      return reply(fenceNotes(lines).join("\n"));
+    },
+  );
+
+  server.registerTool(
+    "memory_get",
+    {
+      title: "Read a project note",
+      description: "Return one note in full by its id (from memory_search or memory_context).",
+      inputSchema: { id: z.number().int().min(1).describe("Note id, the number after #.") },
+    },
+    async ({ id }) => {
+      const note = notes.get(id);
+      if (!note) return reply(`There is no note #${id}.`);
+      const header = `#${note.id} [${note.type}] project ${clipLessonField(note.project, 80)} · created ${day(note.createdAt)} · updated ${day(note.updatedAt)}`;
+      return reply(fenceNotes([header, `${note.topic ? `topic: ${clipLessonField(note.topic, 120)}\n` : ""}${clipLessonField(note.title, 160)}`, clipNoteBody(note.content, 4000)]).join("\n"));
+    },
+  );
+
+  server.registerTool(
+    "session_summary",
+    {
+      title: "Save the session summary",
+      description:
+        "Before ending a session with real work done, or before a handoff, save what was done, what was decided, what was " +
+        "learned and what is still pending, so the next session can continue from memory_context.",
+      inputSchema: {
+        summary: z.string().min(10).max(4000).describe("Goal, done, decisions, discoveries, pending next steps."),
+        project: projectArg,
+      },
+    },
+    async ({ summary, project }) => {
+      const target = project ?? currentProject;
+      const { id } = notes.save({ project: target, type: "session", title: `Session ${new Date().toISOString().slice(0, 16)}`, content: summary });
+      return reply(`Saved session summary #${id} in project "${target}".`);
+    },
+  );
 }
