@@ -4,8 +4,9 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { ClaudeBuilder, ClaudeLessonWriter, ClaudeReviewer, ClaudeSpecWriter } from "./adapters/claudeAgents.ts";
-import { EngramMemory } from "./adapters/engramMemory.ts";
-import { JsonlMemory, MirroredMemory } from "./adapters/memory.ts";
+import { JsonlMemory } from "./adapters/memory.ts";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { createMemoryServer } from "./mcp/memoryServer.ts";
 import { GitHubCli } from "./adapters/githubCli.ts";
 import { GitWorktrees } from "./adapters/gitWorktrees.ts";
 import { FilePublisher, LocalTaskSource, NoPushWorkspaces, ReadOnlySource } from "./adapters/dryRun.ts";
@@ -35,6 +36,7 @@ Usage:
               [--config <path>]               Register with an existing config instead of writing one into the repo.
   factory projects                            List the registered projects.
   factory dashboard [--port 4747]             Live local view of the runs of every registered project.
+  factory mcp                                 Serve the global technical memory over MCP (stdio) to other agents.
 
 Options:
   --project <name|path>  A registered project; uses its .factory/project.json.
@@ -54,11 +56,10 @@ interface WireOptions {
   projectName?: string;
 }
 
-/** The global memory: the factory's own store, mirrored into Engram when enabled. */
+/** The global technical memory, shared by every project and, through `factory mcp`, by other agents. */
 function memoryFor(config: FactoryConfig): Memory | undefined {
   if (!config.memory.enabled) return undefined;
-  const own = new JsonlMemory();
-  return config.memory.engram ? new MirroredMemory(own, new EngramMemory()) : own;
+  return new JsonlMemory();
 }
 
 function wire(config: FactoryConfig, options: WireOptions): { deps: FactoryDeps; settings: FactorySettings } {
@@ -121,6 +122,12 @@ async function main(): Promise<number> {
   if (values.help || !command) {
     console.log(USAGE);
     return command ? 0 : 1;
+  }
+
+  if (command === "mcp") {
+    // stdout belongs to the MCP protocol: nothing else may be printed in this mode.
+    await createMemoryServer(new JsonlMemory()).connect(new StdioServerTransport());
+    return new Promise<number>(() => {}); // served until the client closes the process
   }
 
   const registry = new ProjectRegistry();

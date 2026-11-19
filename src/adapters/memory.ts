@@ -27,32 +27,6 @@ export function keywords(text: string): string[] {
   return [...new Set(words)];
 }
 
-const FIELDS = ["Problem", "Fix", "Stack", "Tags", "Source"] as const;
-const oneLine = (s: string) => s.replace(/\s*\r?\n\s*/g, " ").trim();
-
-/** The markdown body used to store a lesson in an external memory such as Engram. */
-export function lessonBody(l: Lesson): string {
-  return [
-    `**Problem**: ${oneLine(l.problem)}`,
-    `**Fix**: ${oneLine(l.fix)}`,
-    `**Stack**: ${l.stack}`,
-    `**Tags**: ${l.tags.join(", ")}`,
-    `**Source**: ${l.source}`,
-  ].join("\n");
-}
-
-export function parseLessonBody(title: string, body: string): Lesson {
-  const field = (name: (typeof FIELDS)[number]) => body.match(new RegExp(`\\*\\*${name}\\*\\*:\\s*(.*)`))?.[1]?.trim() ?? "";
-  return {
-    title,
-    problem: field("Problem") || oneLine(body),
-    fix: field("Fix"),
-    stack: field("Stack"),
-    tags: field("Tags").split(",").map((t) => t.trim()).filter(Boolean),
-    source: field("Source"),
-  };
-}
-
 const sameTitle = (a: string) => a.trim().toLowerCase();
 
 /** Lessons in a JSONL file. Recall is keyword overlap, with a bonus for the same stack. */
@@ -89,35 +63,6 @@ export class JsonlMemory implements Memory {
       .filter((s) => s.score > 0)
       .sort((a, b) => b.score - a.score);
     return dedupe(scored.map((s) => s.l)).slice(0, query.limit);
-  }
-}
-
-/**
- * The factory's own store is the source of truth; an external memory (Engram) is a mirror that also makes the
- * lessons visible to the user's other agents. If the external one fails, the factory keeps working without it.
- */
-export class MirroredMemory implements Memory {
-  constructor(
-    private readonly own: Memory,
-    private readonly external: Memory,
-    private readonly warn: (message: string) => void = (m) => console.warn(`  [memory] ${m}`),
-  ) {}
-
-  async save(lesson: Lesson): Promise<void> {
-    await this.own.save(lesson);
-    try {
-      await this.external.save(lesson);
-    } catch (error) {
-      this.warn(`external memory save failed, kept in the factory's own store: ${String(error)}`);
-    }
-  }
-
-  async recall(query: RecallQuery): Promise<Lesson[]> {
-    const [own, external] = await Promise.allSettled([this.own.recall(query), this.external.recall(query)]);
-    if (own.status === "rejected") this.warn(`own memory recall failed: ${String(own.reason)}`);
-    if (external.status === "rejected") this.warn(`external memory recall failed: ${String(external.reason)}`);
-    const merged = [...(own.status === "fulfilled" ? own.value : []), ...(external.status === "fulfilled" ? external.value : [])];
-    return dedupe(merged).slice(0, query.limit);
   }
 }
 

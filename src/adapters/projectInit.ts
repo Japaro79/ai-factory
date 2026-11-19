@@ -134,7 +134,7 @@ export function buildProjectConfig(
     specWriter: { model: "claude-opus-5-5", effort: "high", maxTurns: 30 },
     builder: { model: "claude-opus-5-5", effort: "high", maxTurns: 80, allowedBash: [...setup.allowedBash, ...COMMON_BASH] },
     reviewers: { security: reviewer("high"), ux: reviewer("medium"), ui: reviewer("medium"), code: reviewer("medium") },
-    memory: { enabled: true, engram: true, lessonWriter: { model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 } },
+    memory: { enabled: true, lessonWriter: { model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 } },
     limits: { maxRounds: 3, maxCostUsd: 15 },
     risk: {
       maxLowRiskChangedLines: 300,

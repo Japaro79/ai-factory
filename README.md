@@ -72,6 +72,7 @@ factory run --config <file> --task-file <task.md>             a local markdown t
 factory poll [--project <name>] [--dry-run]                   open issues labeled "factory"; all projects when none is given
 factory check-config --project <name>                         print the resolved target, checks and limits
 factory dashboard [--port 4747]                               live dashboard over every registered project
+factory mcp                                                   serve the global technical memory over MCP (stdio)
 ```
 
 `run` and `poll` also start the dashboard in the background unless one is already running (`--no-dashboard` to skip).
@@ -87,13 +88,17 @@ requirements), never what an app does.
 - **Learn.** When a task needed extra rounds (failing checks, blocker or major findings), a small agent with no tools
   turns those failures into at most two generic lessons and saves them with their source (`project/task`). A
   first-round approval teaches nothing and costs nothing.
-- **Storage.** The factory's own append-only store (`~/.ai-factory/memory/lessons.jsonl`) is the source of truth.
-  When `memory.engram` is on, lessons are mirrored into [Engram](https://github.com/Gentleman-Programming/engram) as
-  global learnings, so your other agents see them too. If Engram is missing or fails, the factory keeps working on its
-  own store; contract tests run the real `engram` binary in a throwaway data dir to catch CLI changes early.
+- **Storage.** One append-only file the factory owns: `~/.ai-factory/memory/lessons.jsonl`. No external service.
+- **Shared with your other agents.** `factory mcp` serves the same memory over MCP with two tools,
+  `lessons_search` and `lessons_save`. Register it once and every Claude Code session (or any MCP client) can recall
+  the factory's lessons and add its own, which the factory then uses too:
+
+  ```bash
+  claude mcp add --scope user ai-factory-memory -- node <factory>/node_modules/tsx/dist/cli.mjs <factory>/src/cli.ts mcp
+  ```
 - **Never in the way.** Memory errors are audited (`recall`, `lessons` steps) and never fail a task.
 
-Turn it off per project with `"memory": { "enabled": false }`, or keep only the own store with `"engram": false`.
+Turn it off per project with `"memory": { "enabled": false }`.
 
 ## Where your data lives
 
@@ -106,7 +111,7 @@ The repository holds only the factory. Everything about *your* projects stays on
 | Config kept outside a repo | anywhere, e.g. `~/.ai-factory/projects/<name>.json`, registered with `add --config` |
 | Run history | `<repo>/.factory/runs/` (add it to that repo's `.gitignore`), or `~/.ai-factory/runs/<name>/` for configs kept outside |
 | Spec of each task | `<repo>/odd/tasks/factory-<task id>.md`, committed in the task's PR |
-| Global technical memory | `~/.ai-factory/memory/lessons.jsonl` (+ Engram project `ai-factory`, global scope) |
+| Global technical memory | `~/.ai-factory/memory/lessons.jsonl` (served to other agents by `factory mcp`) |
 | Location of this checkout (for launchers) | `~/.ai-factory/home` |
 
 ## Project config
@@ -114,7 +119,7 @@ The repository holds only the factory. Everything about *your* projects stays on
 `factory add` / `init` infer it from the repo; every field can be edited:
 
 - `target`: GitHub repo, base branch, `stack`, `brain` (docs the agents must read first), `readOnlyPaths` (e.g. package caches agents may read, never write).
-- `memory`: `enabled`, `engram` (mirror into Engram), `lessonWriter` (model of the agent that writes lessons).
+- `memory`: `enabled`, `lessonWriter` (model of the agent that writes lessons).
 - `checks.commands`: what must exit 0 after every build round.
 - `specWriter`, `builder`, `reviewers.*`: model, effort and turn limit per role; `builder.allowedBash` is the shell allowlist.
 - `limits`: `maxRounds`, `maxCostUsd` (estimated, at API list prices).
@@ -165,7 +170,8 @@ word, so personal data cannot slip into the repo.
   harness used to build this factory. Its Organic-Driven Development workflow and feature-document convention
   shaped how the factory documents tasks in each project.
 - **[Engram](https://github.com/Gentleman-Programming/engram)** by Gentleman Programming (MIT): persistent memory for
-  AI agents; the optional mirror of the global memory, used through its CLI.
+  AI agents; the inspiration for serving the factory's memory to every agent over MCP.
+- **[Model Context Protocol TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)** (MIT): the memory server.
 - **[RSC Harness](https://github.com/ericrisco/rsc-harness)** and Eric Risco's talk on software factories (MIT): the
   inspiration for the pipeline (spec writer, builder, four reviewers, approver, risk check).
 - **[Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk)** by Anthropic: runs every agent.

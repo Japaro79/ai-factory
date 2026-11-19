@@ -45,11 +45,9 @@ export const configSchema = z.object({
   memory: z
     .object({
       enabled: z.boolean().default(true),
-      /** Also mirror lessons into Engram (needs the engram CLI); the factory's own store is always written. */
-      engram: z.boolean().default(true),
       lessonWriter: modelSettings.default({ model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 }),
     })
-    .default({ enabled: true, engram: true, lessonWriter: { model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 } }),
+    .default({ enabled: true, lessonWriter: { model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 } }),
   limits: z.object({
     maxRounds: z.number().int().min(1).max(5).default(3),
     maxCostUsd: z.number().positive().default(15),
