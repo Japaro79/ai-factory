@@ -1,0 +1,127 @@
+name: Bug report
+description: Something in the factory or its harness does not work as documented
+labels: ["type:bug", "status:needs-review"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## How this works
+
+        1. **Submit** this report. It gets `status:needs-review` automatically.
+        2. **Review.** A maintainer adds `status:approved` once the bug is confirmed and the fix is wanted.
+        3. **Only then** open a PR that says `Closes #<this issue>`. PR Validation rejects PRs whose issue is not approved.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight checklist
+      options:
+        - label: I searched the existing issues (open and closed) and this is not a duplicate
+          required: true
+        - label: I understand a PR for this needs the issue to carry `status:approved` first
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Issue factory (run, poll)
+        - Harness setup (install, sync, doctor, restore)
+        - Checkpoint or gate
+        - Memory (MCP server, notes, lessons)
+        - Dashboard
+        - Skills or subagents
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug description
+      description: What is wrong, in one or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands, with private paths and names replaced by placeholders such as `acme/shop`.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the error message or exit code.
+    validations:
+      required: true
+
+  - type: input
+    id: commit
+    attributes:
+      label: Factory commit
+      description: Run `git rev-parse --short HEAD` in your factory checkout.
+      placeholder: "e.g. 4ccc635"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      description: Run `node --version`.
+      placeholder: "e.g. v22.13.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Windows (WSL)
+        - macOS
+        - Linux
+    validations:
+      required: true
+
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Coding agent involved
+      multiple: true
+      options:
+        - Claude Code
+        - Codex
+        - OpenCode
+        - Antigravity
+        - None
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `factory setup doctor`
+      description: Optional, but it answers most setup questions. Remove anything private.
+      render: shell
+    validations:
+      required: false
