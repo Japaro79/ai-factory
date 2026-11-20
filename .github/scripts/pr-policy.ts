@@ -90,25 +90,40 @@ export async function runPolicy(run: PolicyRun): Promise<boolean> {
   return size.ok && issue.ok;
 }
 
+export type GhResult = { status: "ok"; data: any } | { status: "not_found" };
+
+/** How a failed `gh api` call counts: a 404 means the resource does not exist; anything else fails the check closed. */
+export function classifyGhError(stderr: string): "not_found" | "fail" {
+  return /HTTP 404/.test(stderr) ? "not_found" : "fail";
+}
+
 /** `gh api` without a shell; a 404 is reported as such, anything else fails the check closed. */
-function ghApi(path: string): Promise<{ status: "ok"; data: any } | { status: "not_found" }> {
+function ghApi(path: string): Promise<GhResult> {
   return new Promise((resolve, reject) => {
     execFile("gh", ["api", path], { maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (!error) return resolve({ status: "ok", data: JSON.parse(stdout) });
-      if (/HTTP 404/.test(stderr)) return resolve({ status: "not_found" });
+      if (classifyGhError(stderr) === "not_found") return resolve({ status: "not_found" });
       reject(new Error(`gh api ${path} failed: ${stderr.trim() || error.message}`));
     });
   });
 }
 
-async function main(): Promise<void> {
-  const repo = process.env.GITHUB_REPOSITORY;
-  const eventPath = process.env.GITHUB_EVENT_PATH;
+export interface EntryDeps {
+  env: { GITHUB_REPOSITORY?: string; GITHUB_EVENT_PATH?: string };
+  readEvent: (path: string) => Promise<string>;
+  ghApi: (path: string) => Promise<GhResult>;
+  log: (line: string) => void;
+}
+
+/** Reads the Actions environment and the event, runs the policy on the live PR, and returns whether it passes. */
+export async function runFromEnv(deps: EntryDeps): Promise<boolean> {
+  const repo = deps.env.GITHUB_REPOSITORY;
+  const eventPath = deps.env.GITHUB_EVENT_PATH;
   if (!repo || !eventPath) throw new Error("GITHUB_REPOSITORY and GITHUB_EVENT_PATH are required (run inside GitHub Actions).");
-  const event = JSON.parse(await readFile(eventPath, "utf8")) as { pull_request?: { number: number } };
+  const event = JSON.parse(await deps.readEvent(eventPath)) as { pull_request?: { number: number } };
   if (!event.pull_request) throw new Error("This check runs on pull_request events only.");
   // Live facts, not the event payload: labels and the body may have changed since the event fired.
-  const live = await ghApi(`repos/${repo}/pulls/${event.pull_request.number}`);
+  const live = await deps.ghApi(`repos/${repo}/pulls/${event.pull_request.number}`);
   if (live.status !== "ok") throw new Error(`PR #${event.pull_request.number} not found.`);
   const pr: PrFacts = {
     additions: live.data.additions,
@@ -116,13 +131,22 @@ async function main(): Promise<void> {
     labels: (live.data.labels as Array<{ name: string }>).map((l) => l.name),
     body: live.data.body ?? "",
   };
-  const ok = await runPolicy({
+  return runPolicy({
     pr,
     fetchIssue: async (number) => {
-      const res = await ghApi(`repos/${repo}/issues/${number}`);
+      const res = await deps.ghApi(`repos/${repo}/issues/${number}`);
       if (res.status === "not_found") return { number, found: false, isPullRequest: false, labels: [] };
       return { number, found: true, isPullRequest: "pull_request" in res.data, labels: (res.data.labels as Array<{ name: string }>).map((l) => l.name) };
     },
+    log: deps.log,
+  });
+}
+
+async function main(): Promise<void> {
+  const ok = await runFromEnv({
+    env: process.env,
+    readEvent: (path) => readFile(path, "utf8"),
+    ghApi,
     log: (line) => console.log(line),
   });
   if (!ok) process.exitCode = 1;
