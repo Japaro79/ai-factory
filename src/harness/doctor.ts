@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
-import { memoryServerCommandLine, planHarness, type InstallOptions } from "./install.ts";
+import { claudeMcpAddLine, MEMORY_SERVER, memoryRegistered } from "./claudeMcp.ts";
+import { planHarness, type InstallOptions } from "./install.ts";
 import { AGENTS, harnessInstalled, type AgentId } from "./rules.ts";
 
 /**
@@ -35,7 +36,6 @@ export interface DoctorRun {
 }
 
 const MIN_NODE = [22, 13] as const;
-const MEMORY_SERVER = "ai-factory-memory";
 
 function nodeCheck(version: string): Check {
   const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
@@ -64,18 +64,8 @@ async function agentCheck(agent: AgentId, run: DoctorRun): Promise<Check> {
 }
 
 async function claudeMcpCheck(run: DoctorRun): Promise<Check> {
-  let servers: Record<string, unknown> = {};
-  try {
-    servers = (JSON.parse(await readFile(join(run.home, ".claude.json"), "utf8")) as { mcpServers?: Record<string, unknown> }).mcpServers ?? {};
-  } catch {
-    // A missing or unreadable file means nothing is registered at user scope.
-  }
-  if (MEMORY_SERVER in servers) return { name: "claude-mcp", status: "ok", detail: `${MEMORY_SERVER} registered at user scope` };
-  return {
-    name: "claude-mcp",
-    status: "warn",
-    detail: `${MEMORY_SERVER} not registered at user scope; run: claude mcp add --scope user ${MEMORY_SERVER} -- ${memoryServerCommandLine(run.factoryHome)}`,
-  };
+  if (await memoryRegistered(run.home)) return { name: "claude-mcp", status: "ok", detail: `${MEMORY_SERVER} registered at user scope` };
+  return { name: "claude-mcp", status: "warn", detail: `${MEMORY_SERVER} not registered at user scope; run: ${claudeMcpAddLine(run.factoryHome)}` };
 }
 
 const exists = (path: string) => access(path).then(() => true, () => false);

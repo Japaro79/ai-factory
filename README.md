@@ -91,7 +91,8 @@ requirements), never what an app does.
 - **Storage.** One append-only file the factory owns: `~/.ai-factory/memory/lessons.jsonl`. No external service.
 - **Shared with your other agents.** `factory mcp` serves the same memory over MCP with two tools,
   `lessons_search` and `lessons_save`. Register it once and every Claude Code session (or any MCP client) can recall
-  the factory's lessons and add its own, which the factory then uses too:
+  the factory's lessons and add its own, which the factory then uses too. `factory setup install` (and `sync`) does
+  this for you when `claude` is on PATH; otherwise run:
 
   ```bash
   claude mcp add --scope user ai-factory-memory -- node <factory>/node_modules/tsx/dist/cli.mjs <factory>/src/cli.ts mcp
