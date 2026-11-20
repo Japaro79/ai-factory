@@ -33,9 +33,11 @@ Usage:
                                               Claude Code, Codex, OpenCode and Antigravity, backing up every file.
   factory setup sync [--agent a,b] [--dry-run]  Refresh the harness only where it is already installed, after pulling
                                               factory changes; never installs into a new agent.
+  factory setup uninstall [--agent a,b] [--dry-run]  Remove only our content from the agents that have the harness;
+                                              keeps permission rules and lists the files you modified.
   factory setup doctor [--agent a,b] [--json]  Read-only health check: Node, dependencies, each agent up to date,
                                               memory store, memory MCP in Claude Code, git/gh/codegraph. Exit 1 on fail.
-  factory setup restore <backup id>           Undo a setup install or sync from its backup.
+  factory setup restore <backup id>           Undo a setup install, sync or uninstall from its backup.
   factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
   factory gate init | run [--no-cache]         Pre-commit review of staged files against the repo rules (AGENTS.md).
@@ -313,7 +315,7 @@ async function main(): Promise<number> {
   return 1;
 }
 
-/** `factory setup install|sync|doctor|restore`: the harness for each agent, backed up before every write. */
+/** `factory setup install|sync|uninstall|doctor|restore`: the harness for each agent, backed up before every write. */
 async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean, json: boolean): Promise<number> {
   if (action === "doctor") {
     const { commandOnPath, runDoctor } = await import("./harness/doctor.ts");
@@ -342,8 +344,8 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     for (const path of await backups.restore(arg)) console.log(`restored ${path}`);
     return 0;
   }
-  if (action !== "install" && action !== "sync") {
-    console.error('setup needs "install", "sync", "doctor" or "restore <backup id>".');
+  if (action !== "install" && action !== "sync" && action !== "uninstall") {
+    console.error('setup needs "install", "sync", "uninstall", "doctor" or "restore <backup id>".');
     return 1;
   }
   return setupAgents({ action, agentList, dryRun, home: homedir(), backups, out: console.log, err: console.error });

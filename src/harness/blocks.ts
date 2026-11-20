@@ -39,6 +39,11 @@ export function removeBlock(doc: string, name: string): string {
   return after ? `${before}${eol}${eol}${after}` : `${before}${eol}`;
 }
 
+/** Removes every one of our blocks; the user's text around them stays byte for byte. */
+export function removeAllBlocks(doc: string): string {
+  return listBlocks(doc).reduce((next, name) => removeBlock(next, name), doc);
+}
+
 /** Names of our blocks in file order. */
 export function listBlocks(doc: string): string[] {
   return [...doc.matchAll(new RegExp(`<!-- ${PREFIX}:([A-Za-z0-9_.-]+) -->`, "g"))].map((m) => m[1]!);

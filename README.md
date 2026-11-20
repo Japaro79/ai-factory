@@ -137,8 +137,10 @@ and the shared memory.
 factory setup install --dry-run     # see every file it would change
 factory setup install               # install for all four agents (or --agent claude-code,codex)
 factory setup sync                  # after pulling: refresh only the agents already set up
+factory setup uninstall --dry-run   # see what removing the harness would change (or --agent codex)
+factory setup uninstall             # remove only our content; files you modified are kept and listed
 factory setup doctor                # read-only health check of the setup (exit 1 on a failure)
-factory setup restore <backup id>   # undo one install or sync
+factory setup restore <backup id>   # undo one install, sync or uninstall
 ```
 
 **Gate** reviews what you are about to commit against the repository's own rules (its `AGENTS.md`, or the file set in

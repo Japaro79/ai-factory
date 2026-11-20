@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listBlocks, removeBlock, splitForSize, upsertBlock } from "../../src/harness/blocks.ts";
+import { listBlocks, removeAllBlocks, removeBlock, splitForSize, upsertBlock } from "../../src/harness/blocks.ts";
 
 describe("upsertBlock", () => {
   it("appends a new block after the existing text, separated by one blank line", () => {
@@ -34,6 +34,20 @@ describe("removeBlock and listBlocks", () => {
     doc = removeBlock(doc, "voice");
     expect(doc).toBe("intro\n\n<!-- ai-factory:codegraph -->\nb\n<!-- /ai-factory:codegraph -->\n");
     expect(removeBlock(doc, "missing")).toBe(doc);
+  });
+
+  it("undoes upsertBlock byte for byte on a CRLF file ending in one line break", () => {
+    const mine = "# Mine\r\n\r\nKeep\r\nMixed\nlast\r\n";
+    const installed = upsertBlock(upsertBlock(mine, "voice", "a\nb"), "codegraph", "c");
+    expect(removeAllBlocks(installed)).toBe(mine);
+  });
+
+  it("leaves an empty document when only our blocks were there", () => {
+    expect(removeAllBlocks(upsertBlock(upsertBlock("", "voice", "a"), "memory", "b"))).toBe("");
+  });
+
+  it("keeps the user's text after our block", () => {
+    expect(removeAllBlocks("top\r\n\r\n<!-- ai-factory:voice -->\r\nx\r\n<!-- /ai-factory:voice -->\r\n\r\n## After\r\n")).toBe("top\r\n\r\n## After\r\n");
   });
 });
 
