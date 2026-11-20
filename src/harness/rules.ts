@@ -29,6 +29,12 @@ const ANTIGRAVITY_MAX_BYTES = 24_000;
 const ANTIGRAVITY_HEADER = "---\ntrigger: always_on\n---\n\n";
 const ANTIGRAVITY_FILE = /^ai-factory-\d\d-[a-z0-9-]+\.md$/;
 
+/**
+ * Reads a shipped harness asset with LF line endings. A checkout with core.autocrlf has CRLF files; without this, the
+ * installed copies would flip line endings with the checkout and always look out of date.
+ */
+export const readAsset = async (path: string) => (await readFile(path, "utf8")).replace(/\r\n/g, "\n");
+
 const stripFrontmatter = (text: string) => text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
 const readOrUndefined = (path: string) => readFile(path, "utf8").catch(() => undefined);
 
@@ -40,13 +46,13 @@ export async function loadBlocks(options: { withStyle: boolean; personalFile?: s
   const dir = options.harnessDir ?? HARNESS_DIR;
   const blocks: Block[] = [];
   for (const name of RULE_ORDER) {
-    let body = (await readFile(join(dir, "rules", `${name}.md`), "utf8")).trim();
+    let body = (await readAsset(join(dir, "rules", `${name}.md`))).trim();
     if (name === "voice" && options.withStyle) {
-      body += "\n\n" + stripFrontmatter(await readFile(join(dir, "output-styles", "mentor.md"), "utf8")).replace(/^# Mentor\s*/, "");
+      body += "\n\n" + stripFrontmatter(await readAsset(join(dir, "output-styles", "mentor.md"))).replace(/^# Mentor\s*/, "");
     }
     blocks.push({ name, body });
     if (name === "voice") {
-      const personal = await readOrUndefined(options.personalFile ?? DEFAULT_PERSONAL_FILE);
+      const personal = await readAsset(options.personalFile ?? DEFAULT_PERSONAL_FILE).catch(() => undefined);
       if (personal?.trim()) blocks.push({ name: "personal", body: personal.trim() });
     }
   }
@@ -125,7 +131,7 @@ export async function planRules(agent: AgentId, home: string, options: { persona
   const writes = "file" in where ? await planInstructionFile(where.file, blocks) : await planAntigravity(where.dir, blocks);
   if (agent === "claude-code") {
     const stylePath = join(home, ".claude", "output-styles", "mentor.md");
-    const style = await readFile(join(options.harnessDir ?? HARNESS_DIR, "output-styles", "mentor.md"), "utf8");
+    const style = await readAsset(join(options.harnessDir ?? HARNESS_DIR, "output-styles", "mentor.md"));
     if ((await readOrUndefined(stylePath)) !== style) writes.push({ path: stylePath, content: style });
   }
   return { agent, writes };

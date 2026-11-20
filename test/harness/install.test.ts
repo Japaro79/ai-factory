@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Backups } from "../../src/harness/backups.ts";
-import { applyPlan } from "../../src/harness/rules.ts";
+import { AGENTS, applyPlan, HARNESS_DIR } from "../../src/harness/rules.ts";
 import { planHarness, renderAgents } from "../../src/harness/install.ts";
 
 let home: string;
@@ -174,5 +174,35 @@ describe("installer advisories", () => {
     expect(stop).toContain("/new/place/src/cli.ts");
     expect(stop).not.toContain(`${factory}/src/cli.ts`);
     expect(stop.match(/check hook/g)).toHaveLength(1);
+  });
+});
+
+describe("line endings", () => {
+  /** A copy of the shipped harness with every text file converted to the given line ending. */
+  async function harnessCopy(eol: "\n" | "\r\n"): Promise<string> {
+    const dir = join(home, eol === "\n" ? "harness-lf" : "harness-crlf");
+    await cp(HARNESS_DIR, dir, { recursive: true });
+    for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+      if (!entry.isFile()) continue;
+      const path = join(entry.parentPath, entry.name);
+      await writeFile(path, (await readFile(path, "utf8")).replace(/\r\n/g, "\n").replace(/\n/g, eol));
+    }
+    return dir;
+  }
+
+  it("installs every asset with LF from a CRLF checkout, so an LF checkout finds nothing to change", async () => {
+    const crlf = await harnessCopy("\r\n");
+    const lf = await harnessCopy("\n");
+    const personalFile = join(home, "personal.md");
+    await writeFile(personalFile, "# Personal\r\n\r\n- mine\r\n");
+    const target = join(home, "target");
+    const options = (harnessDir: string) => ({ factoryHome: factory, harnessDir, personalFile, settingsFile: join(home, "none.json") });
+    for (const agent of AGENTS) {
+      const plan = await planHarness(agent, target, options(crlf));
+      const withCr = plan.writes.filter((w) => w.content?.includes("\r")).map((w) => w.path);
+      expect(withCr, agent).toEqual([]);
+      await applyPlan(plan, new Backups(join(home, "b")));
+      expect((await planHarness(agent, target, options(lf))).writes.map((w) => w.path), agent).toEqual([]);
+    }
   });
 });

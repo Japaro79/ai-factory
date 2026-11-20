@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
 import { FACTORY_HOME } from "../adapters/projectRegistry.ts";
-import { HARNESS_DIR, planRules, type AgentId, type Plan, type Write } from "./rules.ts";
+import { HARNESS_DIR, planRules, readAsset, type AgentId, type Plan, type Write } from "./rules.ts";
 
 /**
  * Everything the harness installs besides the rule blocks: skills, subagents, the memory and docs MCP servers, session
@@ -76,7 +76,7 @@ async function listFiles(dir: string): Promise<string[]> {
 
 /** The shared rules every subagent carries, after its own instructions. */
 async function agentTail(dir: string): Promise<string> {
-  const parts = await Promise.all(["agent-basics", "codegraph", "remote-access"].map((n) => readFile(join(dir, "rules", `${n}.md`), "utf8")));
+  const parts = await Promise.all(["agent-basics", "codegraph", "remote-access"].map((n) => readAsset(join(dir, "rules", `${n}.md`))));
   return parts.map((p) => p.trim()).join("\n\n");
 }
 
@@ -86,16 +86,16 @@ export async function renderAgents(harnessDir: string = HARNESS_DIR): Promise<Ag
   const expand = async (text: string) => {
     let out = text;
     for (const m of text.matchAll(/\{\{include:([^}]+)\}\}/g)) {
-      out = out.replace(m[0], (await readFile(join(harnessDir, m[1]!.trim()), "utf8")).trim());
+      out = out.replace(m[0], (await readAsset(join(harnessDir, m[1]!.trim()))).trim());
     }
     return out;
   };
   const agents: AgentDef[] = [];
   for (const file of (await listFiles(join(harnessDir, "agents"))).filter((f) => f.endsWith(".md")).sort()) {
-    const { meta, body } = parseFrontmatter(await readFile(file, "utf8"));
+    const { meta, body } = parseFrontmatter(await readAsset(file));
     agents.push({ name: meta.name!, description: meta.description!, access: (meta.access as Access) ?? "read", body: `${await expand(body)}\n\n${tail}` });
   }
-  const check = (p: string) => readFile(join(harnessDir, "checkpoint", p), "utf8").then((t) => t.trim());
+  const check = (p: string) => readAsset(join(harnessDir, "checkpoint", p)).then((t) => t.trim());
   const reviewer = await check("reviewer.md");
   for (const [lens, title] of Object.entries(LENS_TITLES)) {
     agents.push({
@@ -158,7 +158,7 @@ async function jsonWrite(path: string, merge: (current: Record<string, any>) => 
 async function skillWrites(root: string, harnessDir: string): Promise<Write[]> {
   const source = join(harnessDir, "skills");
   const writes: Write[] = [];
-  for (const file of await listFiles(source)) writes.push(...(await fileWrite(join(root, relative(source, file)), await readFile(file, "utf8"))));
+  for (const file of await listFiles(source)) writes.push(...(await fileWrite(join(root, relative(source, file)), await readAsset(file))));
   return writes;
 }
 
@@ -279,7 +279,7 @@ export async function planHarness(agent: AgentId, home: string, options: Install
     }
     case "opencode": {
       writes.push(...(await skillWrites(join(home, ".config", "opencode", "skills"), harnessDir)));
-      const plugin = (await readFile(join(harnessDir, "opencode", "ai-factory-skills.ts"), "utf8")).replace('"__FACTORY_COMMAND__" as unknown as string[]', JSON.stringify(command));
+      const plugin = (await readAsset(join(harnessDir, "opencode", "ai-factory-skills.ts"))).replace('"__FACTORY_COMMAND__" as unknown as string[]', JSON.stringify(command));
       writes.push(...(await fileWrite(join(home, ".config", "opencode", "plugins", "ai-factory-skills.ts"), plugin)));
       const g = await guard("opencode");
       writes.push(
