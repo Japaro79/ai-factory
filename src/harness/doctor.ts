@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import { memoryServerCommandLine, planHarness, type InstallOptions } from "./install.ts";
 import { AGENTS, harnessInstalled, type AgentId } from "./rules.ts";
 
@@ -77,11 +78,30 @@ async function claudeMcpCheck(run: DoctorRun): Promise<Check> {
   };
 }
 
+const exists = (path: string) => access(path).then(() => true, () => false);
+
+/**
+ * Opens the store read-only without leaving files behind. Without a -wal file no connection has the store open, so an
+ * immutable read is consistent and creates no -wal/-shm; with one, a plain read-only open sees the WAL and creates
+ * nothing new. Node before 22.15 may not take the URI; readOnly makes that attempt fail instead of creating a file,
+ * and the plain open follows.
+ */
+async function openReadOnly(file: string): Promise<DatabaseSync> {
+  if (!(await exists(`${file}-wal`))) {
+    try {
+      return new DatabaseSync(`${pathToFileURL(file).href}?immutable=1`, { readOnly: true });
+    } catch {
+      // Fall through to the plain read-only open.
+    }
+  }
+  return new DatabaseSync(file, { readOnly: true });
+}
+
 async function memoryCheck(file: string): Promise<Check> {
-  if (!(await access(file).then(() => true, () => false))) return { name: "memory", status: "ok", detail: "not created yet (created on the first save)" };
+  if (!(await exists(file))) return { name: "memory", status: "ok", detail: "not created yet (created on the first save)" };
   let db: DatabaseSync | undefined;
   try {
-    db = new DatabaseSync(file, { readOnly: true });
+    db = await openReadOnly(file);
     const { n } = db.prepare("SELECT count(*) AS n FROM notes").get() as { n: number };
     return { name: "memory", status: "ok", detail: `${n} note(s) in ${file}` };
   } catch (error) {

@@ -116,6 +116,31 @@ describe("setup doctor", () => {
     expect(line("memory")).toMatch(/^fail\s+memory\s+/);
   });
 
+  it("reads a closed WAL store without leaving -wal or -shm files behind", async () => {
+    const notes = new SqliteNotes(notesFile);
+    notes.save({ project: "p", type: "other", title: "one", content: "a" });
+    notes.save({ project: "p", type: "other", title: "two", content: "b" });
+    notes.close();
+    const dir = join(home, ".ai-factory", "memory");
+    const before = await readdir(dir);
+    const bytes = await readFile(notesFile);
+    expect(await doctor()).toBe(0);
+    expect(line("memory")).toMatch(/^ok\s+memory\s+2 note\(s\)/);
+    expect(await readdir(dir)).toEqual(before);
+    expect((await readFile(notesFile)).equals(bytes)).toBe(true);
+  });
+
+  it("counts notes still in the WAL while another connection has the store open", async () => {
+    const notes = new SqliteNotes(notesFile);
+    notes.save({ project: "p", type: "other", title: "one", content: "a" });
+    try {
+      expect(await doctor()).toBe(0);
+      expect(line("memory")).toMatch(/^ok\s+memory\s+1 note\(s\)/);
+    } finally {
+      notes.close();
+    }
+  });
+
   it("warns when Claude Code has the harness but not the memory server, with the command that registers it", async () => {
     await install("claude-code");
     await writeFile(join(home, ".claude.json"), JSON.stringify({ mcpServers: { other: {} } }));
