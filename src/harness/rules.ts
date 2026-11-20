@@ -93,28 +93,40 @@ async function planAntigravity(dir: string, blocks: Block[]): Promise<Write[]> {
   return writes;
 }
 
+/** Where each agent keeps the rules we install: one instruction file, or (Antigravity) a folder of rule files. */
+function rulesLocation(agent: AgentId, home: string): { file: string } | { dir: string } {
+  switch (agent) {
+    case "claude-code":
+      return { file: join(home, ".claude", "CLAUDE.md") };
+    case "codex":
+      return { file: join(home, ".codex", "AGENTS.md") };
+    case "opencode":
+      return { file: join(home, ".config", "opencode", "AGENTS.md") };
+    case "antigravity":
+      return { dir: join(home, ".gemini", "config", "rules") };
+  }
+}
+
+/** Whether the harness is installed for an agent: one of our blocks in its instruction file, or one of our rule files. */
+export async function harnessInstalled(agent: AgentId, home: string): Promise<boolean> {
+  const where = rulesLocation(agent, home);
+  if ("file" in where) return ((await readOrUndefined(where.file)) ?? "").includes("<!-- ai-factory:");
+  for (const file of await readdir(where.dir).catch(() => [] as string[])) {
+    if (ANTIGRAVITY_FILE.test(file) && (await readOrUndefined(join(where.dir, file)))?.startsWith(ANTIGRAVITY_HEADER)) return true;
+  }
+  return false;
+}
+
 /** What installing the rules for one agent would change, without changing anything. */
 export async function planRules(agent: AgentId, home: string, options: { personalFile?: string; harnessDir?: string } = {}): Promise<Plan> {
   const withStyle = agent !== "claude-code";
   const blocks = await loadBlocks({ withStyle, ...options });
-  let writes: Write[];
-  switch (agent) {
-    case "claude-code": {
-      writes = await planInstructionFile(join(home, ".claude", "CLAUDE.md"), blocks);
-      const stylePath = join(home, ".claude", "output-styles", "mentor.md");
-      const style = await readFile(join(options.harnessDir ?? HARNESS_DIR, "output-styles", "mentor.md"), "utf8");
-      if ((await readOrUndefined(stylePath)) !== style) writes.push({ path: stylePath, content: style });
-      break;
-    }
-    case "codex":
-      writes = await planInstructionFile(join(home, ".codex", "AGENTS.md"), blocks);
-      break;
-    case "opencode":
-      writes = await planInstructionFile(join(home, ".config", "opencode", "AGENTS.md"), blocks);
-      break;
-    case "antigravity":
-      writes = await planAntigravity(join(home, ".gemini", "config", "rules"), blocks);
-      break;
+  const where = rulesLocation(agent, home);
+  const writes = "file" in where ? await planInstructionFile(where.file, blocks) : await planAntigravity(where.dir, blocks);
+  if (agent === "claude-code") {
+    const stylePath = join(home, ".claude", "output-styles", "mentor.md");
+    const style = await readFile(join(options.harnessDir ?? HARNESS_DIR, "output-styles", "mentor.md"), "utf8");
+    if ((await readOrUndefined(stylePath)) !== style) writes.push({ path: stylePath, content: style });
   }
   return { agent, writes };
 }
