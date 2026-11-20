@@ -139,6 +139,8 @@ factory setup install               # install for all four agents (or --agent cl
 factory setup sync                  # after pulling: refresh only the agents already set up
 factory setup doctor                # read-only health check of the setup (exit 1 on a failure)
 factory setup restore <backup id>   # undo one install or sync
+factory update --check              # read-only: how many commits this checkout is behind origin/main
+factory update                      # on a clean main: git pull --ff-only, npm ci if deps changed, setup sync
 ```
 
 **Gate** reviews what you are about to commit against the repository's own rules (its `AGENTS.md`, or the file set in

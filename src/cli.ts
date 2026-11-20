@@ -36,6 +36,9 @@ Usage:
   factory setup doctor [--agent a,b] [--json]  Read-only health check: Node, dependencies, each agent up to date,
                                               memory store, memory MCP in Claude Code, git/gh/codegraph. Exit 1 on fail.
   factory setup restore <backup id>           Undo a setup install or sync from its backup.
+  factory update [--check]                    Update this factory checkout: on a clean main, git pull --ff-only, npm ci
+                                              (only when package.json or the lockfile changed), then setup sync.
+                                              --check only reports commits behind origin/main.
   factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
   factory gate init | run [--no-cache]         Pre-commit review of staged files against the repo rules (AGENTS.md).
@@ -82,6 +85,7 @@ async function main(): Promise<number> {
       event: { type: "string" },
       "no-cache": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
+      check: { type: "boolean", default: false },
       "no-dashboard": { type: "boolean", default: false },
       help: { type: "boolean", short: "h" },
     },
@@ -182,6 +186,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (command === "update") return updateCommand(values.check === true);
   if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true);
 
   const registry = new ProjectRegistry();
@@ -347,6 +352,34 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     return 1;
   }
   return setupAgents({ action, agentList, dryRun, home: homedir(), backups, out: console.log, err: console.error });
+}
+
+/** `factory update [--check]`: fast-forward this checkout to origin/main, reinstall changed dependencies, resync. */
+async function updateCommand(check: boolean): Promise<number> {
+  const { execFile } = await import("node:child_process");
+  const { existsSync } = await import("node:fs");
+  const { npmCliScript, runUpdate } = await import("./harness/update.ts");
+  const { HARNESS_DIR } = await import("./harness/rules.ts");
+  const exec = (cmd: string, args: string[], cwd: string) => {
+    let file = cmd;
+    let argv = args;
+    if (cmd === "npm") {
+      // No shell anywhere: run npm's own script with this Node (npmCliScript explains why not "npm" or "npm.cmd").
+      const script = npmCliScript(process.execPath, existsSync);
+      if (!script) return Promise.resolve({ code: 1, stdout: "", stderr: `npm not found next to ${process.execPath}` });
+      file = process.execPath;
+      argv = [script, ...args];
+    }
+    return new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
+      execFile(file, argv, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+        if (!error) return done({ code: 0, stdout, stderr });
+        // A spawn failure (ENOENT) has a string code and no stderr; the message is the only explanation.
+        const code = typeof error.code === "number" ? error.code : 1;
+        done({ code, stdout, stderr: stderr || error.message });
+      });
+    });
+  };
+  return runUpdate({ factoryHome: resolve(HARNESS_DIR, ".."), execPath: process.execPath, check, exec, out: console.log, err: console.error });
 }
 
 /** One poll at a time across the machine: a scheduled poll can outlast its interval. */

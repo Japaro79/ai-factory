@@ -65,6 +65,16 @@ date (a warning points to `sync`), the memory store, the `ai-factory-memory` ser
 `claude mcp add` command when it is missing) and `git`, `gh` and `codegraph` on PATH. Warnings never fail; any
 failure exits 1.
 
+`factory update` keeps the factory checkout itself current. `factory update --check` fetches `origin/main` and only
+reports `up to date with origin/main` or `N commit(s) behind origin/main` (with `, M ahead` for local commits).
+Without `--check` it refuses a checkout with uncommitted changes or on a branch other than `main`, says
+`already up to date` and runs nothing when there is nothing new, and otherwise runs `git pull --ff-only origin main`,
+then `npm ci` only when the pull changed `package.json` or `package-lock.json` (otherwise it prints
+`dependencies unchanged, skipping npm ci`), then `factory setup sync` as a fresh process so the pulled code does the
+sync; the sync's output and exit code are passed through. The first failing step stops the rest and exits 1 with its
+error. When `npm ci` fails (on Windows a running factory can hold files in `node_modules` open), close the running
+factory processes and run `npm ci` and `factory setup sync` in the checkout by hand.
+
 Install also copies the skills and subagents, registers the `ai-factory-memory` and Context7 MCP servers (Codex,
 OpenCode, Antigravity; register them in Claude Code with `claude mcp add`), adds the session hooks (Checkpoint reminder,
 skill index refresh, local usage log), merges the permission guard without overriding your own rules, and selects the
