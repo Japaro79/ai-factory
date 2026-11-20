@@ -1,0 +1,75 @@
+name: Feature request
+description: Propose a new capability or a change to an existing one
+labels: ["type:feature", "status:needs-review"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## How this works
+
+        1. **Submit** this request. It gets `status:needs-review` automatically.
+        2. **Review.** A maintainer adds `status:approved` once the scope is agreed.
+        3. **Only then** open a PR that says `Closes #<this issue>`. PR Validation rejects PRs whose issue is not approved.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Pre-flight checklist
+      options:
+        - label: I searched the existing issues (open and closed) and this is not a duplicate
+          required: true
+        - label: I understand a PR for this needs the issue to carry `status:approved` first
+          required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Issue factory (run, poll)
+        - Harness setup (install, sync, doctor, restore)
+        - Checkpoint or gate
+        - Memory (MCP server, notes, lessons)
+        - Dashboard
+        - Skills or subagents
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you cannot do today, or what is harder than it should be.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Be specific. Show the command, option or output you expect.
+      placeholder: |
+        factory <command> <options>
+
+        Expected output:
+        ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: How we will know it is done. One line per observable behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

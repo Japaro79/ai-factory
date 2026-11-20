@@ -1,0 +1,15 @@
+[
+  { "name": "type:bug", "color": "d73a4a", "description": "Fixes a defect" },
+  { "name": "type:feature", "color": "1d76db", "description": "New capability" },
+  { "name": "type:docs", "color": "0075ca", "description": "Documentation only" },
+  { "name": "type:refactor", "color": "c5def5", "description": "Code change with no behavior change" },
+  { "name": "type:chore", "color": "bfd4f2", "description": "Build, CI, dependencies or tooling" },
+  { "name": "type:breaking-change", "color": "b60205", "description": "Changes existing behavior others rely on" },
+  { "name": "status:needs-review", "color": "fbca04", "description": "Waiting for a maintainer to review" },
+  { "name": "status:approved", "color": "0e8a16", "description": "Approved for implementation: PRs can now be opened" },
+  { "name": "status:needs-info", "color": "d4c5f9", "description": "Waiting for the reporter to add specific information" },
+  { "name": "priority:high", "color": "b60205", "description": "High priority" },
+  { "name": "priority:medium", "color": "fbca04", "description": "Medium priority" },
+  { "name": "priority:low", "color": "c2e0c6", "description": "Low priority" },
+  { "name": "size:exception", "color": "5319e7", "description": "Maintainer-approved exception for PRs over the 400 changed-line budget" }
+]
