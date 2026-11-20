@@ -1,9 +1,9 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Backups } from "../../src/harness/backups.ts";
-import { applyPlan } from "../../src/harness/rules.ts";
+import { AGENTS, applyPlan, HARNESS_DIR } from "../../src/harness/rules.ts";
 import { planHarness, renderAgents } from "../../src/harness/install.ts";
 
 let home: string;
@@ -16,8 +16,10 @@ afterEach(async () => {
 });
 
 const read = (p: string) => readFile(join(home, p), "utf8");
+/** Never the user's real ~/.ai-factory files: paths inside the temporary home that do not exist. */
+const isolated = () => ({ personalFile: join(home, "no-personal.md"), settingsFile: join(home, "no-harness.json") });
 const json = async (p: string) => JSON.parse(await read(p));
-const install = async (agent: Parameters<typeof planHarness>[0]) => applyPlan(await planHarness(agent, home, { factoryHome: factory }), new Backups(join(home, "b")));
+const install = async (agent: Parameters<typeof planHarness>[0]) => applyPlan(await planHarness(agent, home, { factoryHome: factory, ...isolated() }), new Backups(join(home, "b")));
 
 describe("renderAgents", () => {
   it("gives every agent its role, the shared agent rules, and Checkpoint agents built from the review prompts", async () => {
@@ -72,7 +74,7 @@ describe("planHarness", () => {
   it("is idempotent for every agent: a second plan has nothing to write and hooks are never duplicated", async () => {
     for (const agent of ["claude-code", "codex", "opencode", "antigravity"] as const) {
       await install(agent);
-      expect((await planHarness(agent, home, { factoryHome: factory })).writes.map((w) => w.path)).toEqual([]);
+      expect((await planHarness(agent, home, { factoryHome: factory, ...isolated() })).writes.map((w) => w.path)).toEqual([]);
     }
     const settings = await json(".claude/settings.json");
     expect(settings.hooks.Stop.filter((h: unknown) => JSON.stringify(h).includes("check hook"))).toHaveLength(1);
@@ -116,7 +118,7 @@ describe("planHarness", () => {
     const settingsFile = join(home, "harness.json");
     await writeFile(settingsFile, JSON.stringify({ agents: { "factory-builder": { opencode: "openai/gpt-5.5", "claude-code": "opus" } } }));
     for (const agent of ["opencode", "claude-code"] as const) {
-      await applyPlan(await planHarness(agent, home, { factoryHome: factory, settingsFile }), new Backups(join(home, "b")));
+      await applyPlan(await planHarness(agent, home, { factoryHome: factory, ...isolated(), settingsFile }), new Backups(join(home, "b")));
     }
     expect(await read(".config/opencode/plugins/ai-factory-skills.ts")).toContain(`"${factory}/src/cli.ts"`);
     expect((await json(".config/opencode/opencode.json")).agent["factory-builder"].model).toBe("openai/gpt-5.5");
@@ -164,15 +166,45 @@ describe("installer advisories", () => {
   it("refuses to rewrite a config with comments instead of crashing or losing them", async () => {
     await mkdir(join(home, ".config", "opencode"), { recursive: true });
     await writeFile(join(home, ".config", "opencode", "opencode.json"), '{ // mine\n "model": "m" }\n');
-    await expect(planHarness("opencode", home, { factoryHome: factory })).rejects.toThrow(/not plain JSON/);
+    await expect(planHarness("opencode", home, { factoryHome: factory, ...isolated() })).rejects.toThrow(/not plain JSON/);
   });
 
   it("moves its own hooks to the new factory location without touching other hooks", async () => {
     await install("claude-code");
-    await applyPlan(await planHarness("claude-code", home, { factoryHome: "/new/place" }), new Backups(join(home, "b")));
+    await applyPlan(await planHarness("claude-code", home, { factoryHome: "/new/place", ...isolated() }), new Backups(join(home, "b")));
     const stop = JSON.stringify((await json(".claude/settings.json")).hooks.Stop);
     expect(stop).toContain("/new/place/src/cli.ts");
     expect(stop).not.toContain(`${factory}/src/cli.ts`);
     expect(stop.match(/check hook/g)).toHaveLength(1);
+  });
+});
+
+describe("line endings", () => {
+  /** A copy of the shipped harness with every text file converted to the given line ending. */
+  async function harnessCopy(eol: "\n" | "\r\n"): Promise<string> {
+    const dir = join(home, eol === "\n" ? "harness-lf" : "harness-crlf");
+    await cp(HARNESS_DIR, dir, { recursive: true });
+    for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+      if (!entry.isFile()) continue;
+      const path = join(entry.parentPath, entry.name);
+      await writeFile(path, (await readFile(path, "utf8")).replace(/\r\n/g, "\n").replace(/\n/g, eol));
+    }
+    return dir;
+  }
+
+  it("installs every asset with LF from a CRLF checkout, so an LF checkout finds nothing to change", async () => {
+    const crlf = await harnessCopy("\r\n");
+    const lf = await harnessCopy("\n");
+    const personalFile = join(home, "personal.md");
+    await writeFile(personalFile, "# Personal\r\n\r\n- mine\r\n");
+    const target = join(home, "target");
+    const options = (harnessDir: string) => ({ factoryHome: factory, harnessDir, personalFile, settingsFile: join(home, "none.json") });
+    for (const agent of AGENTS) {
+      const plan = await planHarness(agent, target, options(crlf));
+      const withCr = plan.writes.filter((w) => w.content?.includes("\r")).map((w) => w.path);
+      expect(withCr, agent).toEqual([]);
+      await applyPlan(plan, new Backups(join(home, "b")));
+      expect((await planHarness(agent, target, options(lf))).writes.map((w) => w.path), agent).toEqual([]);
+    }
   });
 });

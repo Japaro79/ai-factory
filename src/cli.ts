@@ -31,7 +31,11 @@ Usage:
   factory dashboard [--port 4747]             Live local view of the runs of every registered project.
   factory setup install [--agent a,b] [--dry-run]  Install the harness (rules, skills, agents, MCP, hooks, guard) into
                                               Claude Code, Codex, OpenCode and Antigravity, backing up every file.
-  factory setup restore <backup id>           Undo a setup install from its backup.
+  factory setup sync [--agent a,b] [--dry-run]  Refresh the harness only where it is already installed, after pulling
+                                              factory changes; never installs into a new agent.
+  factory setup doctor [--agent a,b] [--json]  Read-only health check: Node, dependencies, each agent up to date,
+                                              memory store, memory MCP in Claude Code, git/gh/codegraph. Exit 1 on fail.
+  factory setup restore <backup id>           Undo a setup install or sync from its backup.
   factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
   factory gate init | run [--no-cache]         Pre-commit review of staged files against the repo rules (AGENTS.md).
@@ -178,7 +182,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true);
+  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true);
 
   const registry = new ProjectRegistry();
   await recordFactoryHome();
@@ -309,10 +313,25 @@ async function main(): Promise<number> {
   return 1;
 }
 
-/** `factory setup install|restore`: the harness rules for each agent, backed up before every write. */
-async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean): Promise<number> {
-  const { AGENTS, applyPlan } = await import("./harness/rules.ts");
-  const { planHarness } = await import("./harness/install.ts");
+/** `factory setup install|sync|doctor|restore`: the harness for each agent, backed up before every write. */
+async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean, json: boolean): Promise<number> {
+  if (action === "doctor") {
+    const { commandOnPath, runDoctor } = await import("./harness/doctor.ts");
+    const { HARNESS_DIR } = await import("./harness/rules.ts");
+    const { DEFAULT_NOTES_FILE } = await import("./adapters/notes.ts");
+    return runDoctor({
+      home: homedir(),
+      factoryHome: resolve(HARNESS_DIR, ".."),
+      notesFile: DEFAULT_NOTES_FILE,
+      nodeVersion: process.version,
+      agentList,
+      hasCommand: commandOnPath,
+      json,
+      out: console.log,
+      err: console.error,
+    });
+  }
+  const { setupAgents } = await import("./harness/setup.ts");
   const { Backups } = await import("./harness/backups.ts");
   const backups = new Backups(join(FACTORY_HOME, "backups"));
   if (action === "restore") {
@@ -323,39 +342,11 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     for (const path of await backups.restore(arg)) console.log(`restored ${path}`);
     return 0;
   }
-  if (action !== "install") {
-    console.error('setup needs "install" or "restore <backup id>".');
+  if (action !== "install" && action !== "sync") {
+    console.error('setup needs "install", "sync", "doctor" or "restore <backup id>".');
     return 1;
   }
-  const agents = agentList ? agentList.split(",").map((a) => a.trim()) : [...AGENTS];
-  const unknown = agents.filter((a) => !(AGENTS as readonly string[]).includes(a));
-  if (unknown.length) {
-    console.error(`Unknown agent(s): ${unknown.join(", ")}. Known: ${AGENTS.join(", ")}.`);
-    return 1;
-  }
-  let failed = 0;
-  for (const agent of agents as (typeof AGENTS)[number][]) {
-    let plan: Awaited<ReturnType<typeof planHarness>>;
-    try {
-      plan = await planHarness(agent, homedir());
-    } catch (error) {
-      // One agent's unreadable config never blocks the others; nothing is written for this one.
-      console.error(`${agent}: skipped, nothing changed: ${error instanceof Error ? error.message : error}`);
-      failed++;
-      continue;
-    }
-    if (!plan.writes.length) {
-      console.log(`${agent}: up to date`);
-      continue;
-    }
-    if (dryRun) {
-      for (const w of plan.writes) console.log(`${agent}: would ${w.content === null ? "delete" : "write"} ${w.path}`);
-      continue;
-    }
-    const { backupId, changed } = await applyPlan(plan, backups);
-    console.log(`${agent}: ${changed.length} file(s) changed, backup ${backupId} (undo: factory setup restore ${backupId})`);
-  }
-  return failed ? 1 : 0;
+  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, out: console.log, err: console.error });
 }
 
 /** One poll at a time across the machine: a scheduled poll can outlast its interval. */
