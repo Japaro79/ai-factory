@@ -123,3 +123,26 @@ describe("label catalog", () => {
     ]);
   });
 });
+
+describe("edge cases found in verification", () => {
+  it.each([
+    ["Fixes: #3", [3]],
+    ["CLOSES #3", [3]],
+    ["close #3", [3]],
+    ["fixed #3", [3]],
+    ["Closes #3, #4", [3]],
+    ["#3", []],
+    ["Closes https://github.com/acme/shop/issues/3", []],
+    ["Prefixes #3", []],
+    ["Closes #3abc", []],
+    ["Fix #3 and fix #3", [3]],
+  ])("parseIssueRefs(%j) links %j", (body, numbers) => {
+    expect(parseIssueRefs(body).map((r) => r.number)).toEqual(numbers);
+  });
+
+  it("puts the budget edge at exactly 400 changed lines", () => {
+    expect(checkSize({ additions: 200, deletions: 200, labels: [] }).ok).toBe(true);
+    expect(checkSize({ additions: 200, deletions: 201, labels: [] }).ok).toBe(false);
+    expect(checkSize({ additions: 401, deletions: 0, labels: ["size:exception"] })).toMatchObject({ ok: true, warning: true });
+  });
+});
