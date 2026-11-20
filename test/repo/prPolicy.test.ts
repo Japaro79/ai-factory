@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkIssues, checkSize, parseIssueRefs, runPolicy, type IssueFacts } from "../../.github/scripts/pr-policy.ts";
+import { checkIssues, checkSize, classifyGhError, parseIssueRefs, runFromEnv, runPolicy, type GhResult, type IssueFacts } from "../../.github/scripts/pr-policy.ts";
 import { labelCommands } from "../../.github/scripts/sync-labels.ts";
 
 describe("checkSize", () => {
@@ -95,6 +95,99 @@ describe("runPolicy", () => {
     expect(ok).toBe(true);
     expect(lines[0]).toBe("WARN size: 765 changed lines (+700/-65) exceed the 400-line budget; allowed by size:exception.");
     expect(lines[1]).toBe("PASS issue: Linked issue(s) approved: #1.");
+  });
+});
+
+describe("classifyGhError", () => {
+  it("treats an HTTP 404 as not found", () => {
+    expect(classifyGhError("gh: Not Found (HTTP 404)")).toBe("not_found");
+  });
+
+  it.each([["gh: Bad credentials (HTTP 401)"], ["Bad credentials"], ["gh: Server Error (HTTP 500)"], [""]])("fails closed on %j", (stderr) => {
+    expect(classifyGhError(stderr)).toBe("fail");
+  });
+});
+
+describe("runFromEnv", () => {
+  const env = { GITHUB_REPOSITORY: "acme/shop", GITHUB_EVENT_PATH: "/event.json" };
+  const event = JSON.stringify({ pull_request: { number: 7, labels: [{ name: "size:exception" }], body: "Closes #99" } });
+  const livePr: GhResult = { status: "ok", data: { additions: 10, deletions: 2, labels: [{ name: "type:bug" }], body: "Closes #1" } };
+
+  function setup(responses: Record<string, GhResult | Error>, eventText = event) {
+    const lines: string[] = [];
+    const requested: string[] = [];
+    const reads: string[] = [];
+    const deps = {
+      env,
+      readEvent: async (path: string) => (reads.push(path), eventText),
+      ghApi: async (path: string) => {
+        requested.push(path);
+        const res = responses[path];
+        if (!res) throw new Error(`unexpected gh path ${path}`);
+        if (res instanceof Error) throw res;
+        return res;
+      },
+      log: (line: string) => lines.push(line),
+    };
+    return { deps, lines, requested, reads };
+  }
+
+  it.each([[{ GITHUB_EVENT_PATH: "/event.json" }], [{ GITHUB_REPOSITORY: "acme/shop" }], [{}]])("requires both variables (%j)", async (partial) => {
+    const { deps, lines, requested, reads } = setup({});
+    await expect(runFromEnv({ ...deps, env: partial })).rejects.toThrow(/^GITHUB_REPOSITORY and GITHUB_EVENT_PATH are required \(run inside GitHub Actions\)\.$/);
+    expect([lines, requested, reads]).toEqual([[], [], []]);
+  });
+
+  it("fails an event without a pull_request", async () => {
+    const { deps, lines, requested, reads } = setup({}, JSON.stringify({ issue: { number: 7 } }));
+    await expect(runFromEnv(deps)).rejects.toThrow(/^This check runs on pull_request events only\.$/);
+    expect([lines, requested, reads]).toEqual([[], [], ["/event.json"]]);
+  });
+
+  it("reads labels and body from the live PR, not the event payload", async () => {
+    const { deps, lines, requested } = setup({
+      "repos/acme/shop/pulls/7": livePr,
+      "repos/acme/shop/issues/1": { status: "ok", data: { labels: [{ name: "status:approved" }] } },
+    });
+    expect(await runFromEnv(deps)).toBe(true);
+    expect(requested).toEqual(["repos/acme/shop/pulls/7", "repos/acme/shop/issues/1"]);
+    expect(lines).toEqual(["PASS size: 12 changed lines (+10/-2), within the 400-line budget.", "PASS issue: Linked issue(s) approved: #1."]);
+  });
+
+  it("counts a 404 for a linked issue as does not exist, and a linked pull request as not an issue", async () => {
+    const { deps, lines, requested } = setup({
+      "repos/acme/shop/pulls/7": { status: "ok", data: { additions: 1, deletions: 0, labels: [], body: null } },
+    });
+    expect(await runFromEnv(deps)).toBe(false);
+    expect(lines[1]).toBe('FAIL issue: No linked issue. Add "Closes #N" (or Fixes, Resolves, Refs) to the PR description.');
+
+    const second = setup({
+      "repos/acme/shop/pulls/7": { status: "ok", data: { additions: 1, deletions: 0, labels: [], body: "Closes #4\nRefs #5" } },
+      "repos/acme/shop/issues/4": { status: "not_found" },
+      "repos/acme/shop/issues/5": { status: "ok", data: { pull_request: {}, labels: [] } },
+    });
+    expect(await runFromEnv(second.deps)).toBe(false);
+    expect(second.requested).toEqual(["repos/acme/shop/pulls/7", "repos/acme/shop/issues/4", "repos/acme/shop/issues/5"]);
+    expect(second.lines).toEqual([
+      "PASS size: 1 changed lines (+1/-0), within the 400-line budget.",
+      "FAIL issue: #4 does not exist in this repository; #5 is a pull request, not an issue. After a maintainer approves the issue, re-run this check.",
+    ]);
+    expect(requested).toEqual(["repos/acme/shop/pulls/7"]);
+  });
+
+  it("fails closed when gh fails for a linked issue, logging nothing", async () => {
+    const { deps, lines } = setup({
+      "repos/acme/shop/pulls/7": livePr,
+      "repos/acme/shop/issues/1": new Error("gh api repos/acme/shop/issues/1 failed: gh: Bad credentials (HTTP 401)"),
+    });
+    await expect(runFromEnv(deps)).rejects.toThrow("gh api repos/acme/shop/issues/1 failed: gh: Bad credentials (HTTP 401)");
+    expect(lines).toEqual([]);
+  });
+
+  it("fails when the live PR is not found", async () => {
+    const { deps, lines, requested } = setup({ "repos/acme/shop/pulls/7": { status: "not_found" } });
+    await expect(runFromEnv(deps)).rejects.toThrow(/^PR #7 not found\.$/);
+    expect([lines, requested]).toEqual([[], ["repos/acme/shop/pulls/7"]]);
   });
 });
 
