@@ -328,6 +328,7 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
       hasCommand: commandOnPath,
       json,
       out: console.log,
+      err: console.error,
     });
   }
   const { setupAgents } = await import("./harness/setup.ts");

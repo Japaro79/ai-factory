@@ -95,6 +95,44 @@ describe("setup sync", () => {
     expect(await exists("backups")).toBe(false);
   });
 
+  it("says none of the requested agents is installed when --agent names only missing ones", async () => {
+    await run("install", "codex");
+    out = [];
+    expect(await run("sync", "claude-code")).toBe(1);
+    expect(out).toEqual(["claude-code: not installed, skipped (install it with: factory setup install --agent claude-code)"]);
+    expect(err).toEqual(["None of the requested agents has the harness installed; run factory setup install first."]);
+    expect(await exists(".claude")).toBe(false);
+  });
+
+  it("takes a backup that setup restore uses to undo the sync", async () => {
+    await run("install", "codex");
+    const skill = join(home, ".codex", "skills", "stacked-prs", "SKILL.md");
+    await writeFile(skill, "corrupted");
+    out = [];
+    await run("sync");
+    const id = /backup (\S+)/.exec(out[0]!)![1]!;
+    await new Backups(join(home, "backups")).restore(id);
+    expect(await readFile(skill, "utf8")).toBe("corrupted");
+  });
+
+  it("keeps the user's own CRLF and mixed text around our blocks byte for byte", async () => {
+    await run("install", "claude-code");
+    const file = join(home, ".claude", "CLAUDE.md");
+    const installed = (await readFile(file, "utf8")).replace(/\r?\n/g, "\r\n");
+    const mine = "# Mine\r\n\r\nKeep\r\nMixed\nlast\r\n\r\n";
+    const trailer = "\r\n## After\r\nstays\r\n";
+    await writeFile(file, mine + installed.replace("<!-- /ai-factory:voice -->", "broken\r\n<!-- /ai-factory:voice -->") + trailer);
+    out = [];
+    expect(await run("sync")).toBe(0);
+    const synced = await readFile(file, "utf8");
+    expect(synced.startsWith(mine)).toBe(true);
+    expect(synced.endsWith(trailer)).toBe(true);
+    expect(synced).not.toContain("broken");
+    out = [];
+    await run("sync");
+    expect(out).toEqual(["claude-code: up to date"]);
+  });
+
   it("with --dry-run lists what it would write and changes nothing", async () => {
     await run("install", "opencode");
     const agents = join(home, ".config", "opencode", "AGENTS.md");

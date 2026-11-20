@@ -40,6 +40,7 @@ const doctor = (over: Partial<DoctorRun> = {}) =>
     hasCommand: async () => true,
     json: false,
     out: (line) => out.push(line),
+    err: () => {},
     ...over,
   });
 
@@ -140,9 +141,11 @@ describe("setup doctor", () => {
     expect(line("codex")).toMatch(/^skip\s+codex\s+not installed$/);
   });
 
-  it("rejects an unknown agent", async () => {
-    expect(await doctor({ agentList: "cursor" })).toBe(1);
-    expect(out).toEqual(["Unknown agent(s): cursor. Known: claude-code, codex, opencode, antigravity."]);
+  it("rejects an unknown agent on stderr, also with --json", async () => {
+    const err: string[] = [];
+    expect(await doctor({ agentList: "cursor", json: true, err: (l) => err.push(l) })).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toEqual(["Unknown agent(s): cursor. Known: claude-code, codex, opencode, antigravity."]);
   });
 
   it("prints the checks as JSON with --json", async () => {

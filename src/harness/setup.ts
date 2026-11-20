@@ -32,7 +32,7 @@ export async function setupAgents(run: SetupRun): Promise<number> {
       else if (run.agentList) run.out(`${agent}: not installed, skipped (install it with: factory setup install --agent ${agent})`);
     }
     if (!installed.length) {
-      run.err("No agent has the harness installed; run factory setup install first.");
+      run.err(`${run.agentList ? "None of the requested agents has" : "No agent has"} the harness installed; run factory setup install first.`);
       return 1;
     }
     agents = installed;

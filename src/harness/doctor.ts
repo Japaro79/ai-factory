@@ -30,6 +30,7 @@ export interface DoctorRun {
   hasCommand: (command: string) => Promise<boolean>;
   json: boolean;
   out: (line: string) => void;
+  err: (line: string) => void;
 }
 
 const MIN_NODE = [22, 13] as const;
@@ -100,7 +101,7 @@ export async function runDoctor(run: DoctorRun): Promise<number> {
   const requested = run.agentList ? run.agentList.split(",").map((a) => a.trim()) : [...AGENTS];
   const unknown = requested.filter((a) => !(AGENTS as readonly string[]).includes(a));
   if (unknown.length) {
-    run.out(`Unknown agent(s): ${unknown.join(", ")}. Known: ${AGENTS.join(", ")}.`);
+    run.err(`Unknown agent(s): ${unknown.join(", ")}. Known: ${AGENTS.join(", ")}.`);
     return 1;
   }
   const checks: Check[] = [nodeCheck(run.nodeVersion), await factoryCheck(run.factoryHome)];
