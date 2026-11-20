@@ -1,0 +1,34 @@
+name: PR Validation
+
+# pull_request_target runs the policy script from the default branch, never from the PR, so a PR cannot change the
+# rules it is judged by. The job only reads: it never checks out or runs the PR's code.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  policy:
+    # This name is a required check on main; renaming it means updating the ruleset too.
+    name: PR policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the trusted policy from the default branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/pr-policy.ts
+          sparse-checkout-cone-mode: false
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+      - name: Check size budget and approved issue
+        run: node .github/scripts/pr-policy.ts
+        env:
+          GH_TOKEN: ${{ github.token }}
