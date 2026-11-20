@@ -137,6 +137,7 @@ and the shared memory.
 factory setup install --dry-run     # see every file it would change
 factory setup install               # install for all four agents (or --agent claude-code,codex)
 factory setup sync                  # after pulling: refresh only the agents already set up
+factory setup doctor                # read-only health check of the setup (exit 1 on a failure)
 factory setup restore <backup id>   # undo one install or sync
 ```
 

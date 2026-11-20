@@ -53,11 +53,17 @@ voice block.
 factory setup install --dry-run          # see what would change
 factory setup install                    # every agent; or --agent claude-code,codex
 factory setup sync                       # refresh only the agents already installed (after a pull)
+factory setup doctor                     # read-only health check; --json for a machine-readable report
 factory setup restore <backup id>        # undo, with the id printed by install or sync
 ```
 
 `sync` finds the agents that already have the harness by our own markers (an `ai-factory` block in the instruction
 file, or our Antigravity rule files) and never installs into a new one.
+
+`doctor` changes nothing. It checks the Node version, the factory's `node_modules`, whether each installed agent is up to
+date (a warning points to `sync`), the memory store, the `ai-factory-memory` server in Claude Code (with the
+`claude mcp add` command when it is missing) and `git`, `gh` and `codegraph` on PATH. Warnings never fail; any
+failure exits 1.
 
 Install also copies the skills and subagents, registers the `ai-factory-memory` and Context7 MCP servers (Codex,
 OpenCode, Antigravity; register them in Claude Code with `claude mcp add`), adds the session hooks (Checkpoint reminder,

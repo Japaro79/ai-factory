@@ -130,6 +130,9 @@ function factoryCommand(factoryHome: string): string[] {
 }
 const shellCommand = (parts: string[], ...args: string[]) => [...parts.map((p, i) => (i === 0 ? p : `"${p}"`)), ...args].join(" ");
 
+/** The command line that starts the memory MCP server from a factory checkout, as agents run it. */
+export const memoryServerCommandLine = (factoryHome: string) => shellCommand(factoryCommand(factoryHome), "mcp");
+
 /** Writes a file only when its content changes. */
 async function fileWrite(path: string, content: string): Promise<Write[]> {
   return (await readOrUndefined(path)) === content ? [] : [{ path, content }];

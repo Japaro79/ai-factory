@@ -33,6 +33,8 @@ Usage:
                                               Claude Code, Codex, OpenCode and Antigravity, backing up every file.
   factory setup sync [--agent a,b] [--dry-run]  Refresh the harness only where it is already installed, after pulling
                                               factory changes; never installs into a new agent.
+  factory setup doctor [--agent a,b] [--json]  Read-only health check: Node, dependencies, each agent up to date,
+                                              memory store, memory MCP in Claude Code, git/gh/codegraph. Exit 1 on fail.
   factory setup restore <backup id>           Undo a setup install or sync from its backup.
   factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
@@ -180,7 +182,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true);
+  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true);
 
   const registry = new ProjectRegistry();
   await recordFactoryHome();
@@ -311,8 +313,23 @@ async function main(): Promise<number> {
   return 1;
 }
 
-/** `factory setup install|sync|restore`: the harness for each agent, backed up before every write. */
-async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean): Promise<number> {
+/** `factory setup install|sync|doctor|restore`: the harness for each agent, backed up before every write. */
+async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean, json: boolean): Promise<number> {
+  if (action === "doctor") {
+    const { commandOnPath, runDoctor } = await import("./harness/doctor.ts");
+    const { HARNESS_DIR } = await import("./harness/rules.ts");
+    const { DEFAULT_NOTES_FILE } = await import("./adapters/notes.ts");
+    return runDoctor({
+      home: homedir(),
+      factoryHome: resolve(HARNESS_DIR, ".."),
+      notesFile: DEFAULT_NOTES_FILE,
+      nodeVersion: process.version,
+      agentList,
+      hasCommand: commandOnPath,
+      json,
+      out: console.log,
+    });
+  }
   const { setupAgents } = await import("./harness/setup.ts");
   const { Backups } = await import("./harness/backups.ts");
   const backups = new Backups(join(FACTORY_HOME, "backups"));
@@ -325,7 +342,7 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     return 0;
   }
   if (action !== "install" && action !== "sync") {
-    console.error('setup needs "install", "sync" or "restore <backup id>".');
+    console.error('setup needs "install", "sync", "doctor" or "restore <backup id>".');
     return 1;
   }
   return setupAgents({ action, agentList, dryRun, home: homedir(), backups, out: console.log, err: console.error });
