@@ -278,16 +278,79 @@ describe("setup registers the memory server in Claude Code", () => {
     expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
   });
 
-  it("never registers for an action other than install or sync", async () => {
-    // Uninstall needs the harness in place, then must not touch Claude Code's servers.
+  const REMOVE_ARGS = ["mcp", "remove", "--scope", "user", "ai-factory-memory"];
+  const uninstallAfterInstall = async (dryRun = false, claudeOnPath = true) => {
     expect(await run("install", "claude-code")).toBe(0);
     calls.length = 0;
     pathChecks.length = 0;
     out.length = 0;
+    onPath = claudeOnPath;
+    // Like the real CLI, a successful remove takes the server out of ~/.claude.json.
+    runner = async () => writeFile(claudeJson(), ORIGINAL);
+    return run("uninstall" as "install", "claude-code", dryRun);
+  };
+
+  it("uninstall never registers; it removes the memory server, after backing up ~/.claude.json", async () => {
+    expect(await uninstallAfterInstall()).toBe(0);
+    expect(calls).toEqual([["claude", REMOVE_ARGS]]);
+    const line = out.find((l) => l.includes("ai-factory-memory"))!;
+    const match = /^claude-code: removed ai-factory-memory from Claude Code \(backup (\S+)\)$/.exec(line);
+    expect(match).not.toBeNull();
+    await new Backups(join(home, "backups")).restore(match![1]!);
+    expect(await readFile(claudeJson(), "utf8")).toBe(REGISTERED);
+  });
+
+  it("uninstall --dry-run only says it would remove the server", async () => {
+    expect(await uninstallAfterInstall(true)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(out).toContain("claude-code: would run claude mcp remove --scope user ai-factory-memory");
+    expect(await readFile(claudeJson(), "utf8")).toBe(REGISTERED);
+  });
+
+  it("uninstall with claude not on PATH says how to remove the server and does not fail", async () => {
+    expect(await uninstallAfterInstall(false, false)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(out).toContain("claude-code: claude not on PATH; remove the memory server with: claude mcp remove --scope user ai-factory-memory");
+  });
+
+  it("uninstall reports a failed claude mcp remove with its backup id and the manual command, and exits 1", async () => {
+    expect(await run("install", "claude-code")).toBe(0);
+    calls.length = 0;
+    runner = async () => {
+      throw new Error("boom");
+    };
+    expect(await run("uninstall" as "install", "claude-code")).toBe(1);
+    expect(calls).toEqual([["claude", REMOVE_ARGS]]);
+    expect(err).toEqual([
+      expect.stringMatching(/^claude-code: claude mcp remove failed \(backup \S+\): boom; remove it by hand with: claude mcp remove --scope user ai-factory-memory$/),
+    ]);
+    expect(await readFile(claudeJson(), "utf8")).toBe(REGISTERED);
+  });
+
+  it("a retried uninstall still removes the server after the harness files are gone", async () => {
+    expect(await run("install", "claude-code")).toBe(0);
+    runner = async () => {
+      throw new Error("boom");
+    };
+    expect(await run("uninstall" as "install", "claude-code")).toBe(1);
+    calls.length = 0;
+    out.length = 0;
+    err.length = 0;
+    runner = async () => writeFile(claudeJson(), ORIGINAL);
+    expect(await run("uninstall" as "install", "claude-code")).toBe(0);
+    expect(calls).toEqual([["claude", REMOVE_ARGS]]);
+    expect(err).toEqual([]);
+    expect(out).toContainEqual(expect.stringMatching(/^claude-code: removed ai-factory-memory from Claude Code \(backup \S+\)$/));
+  });
+
+  it("uninstall runs nothing in Claude Code when the server is not registered", async () => {
+    expect(await run("install", "claude-code")).toBe(0);
+    await writeFile(claudeJson(), ORIGINAL);
+    calls.length = 0;
+    pathChecks.length = 0;
     expect(await run("uninstall" as "install", "claude-code")).toBe(0);
     expect(calls).toEqual([]);
     expect(pathChecks).toEqual([]);
-    expect(out.some((l) => l.includes("ai-factory-memory"))).toBe(false);
   });
 
   it("leaves installs for the other agents exactly as before", async () => {

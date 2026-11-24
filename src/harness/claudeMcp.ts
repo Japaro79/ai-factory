@@ -69,6 +69,34 @@ export async function registerMemoryInClaude(step: ClaudeMcpStep): Promise<boole
   return false;
 }
 
+const CLAUDE_MCP_REMOVE_ARGS = ["mcp", "remove", "--scope", "user", MEMORY_SERVER];
+const CLAUDE_MCP_REMOVE_LINE = `claude ${CLAUDE_MCP_REMOVE_ARGS.join(" ")}`;
+
+/** Removes the memory server from Claude Code when it is registered. Returns true when the removal failed. */
+export async function unregisterMemoryInClaude(step: ClaudeMcpStep): Promise<boolean> {
+  if (!(await memoryRegistered(step.home))) return false;
+  if (step.dryRun) {
+    step.out(`claude-code: would run ${CLAUDE_MCP_REMOVE_LINE}`);
+    return false;
+  }
+  if (!(await step.hasCommand("claude"))) {
+    step.out(`claude-code: claude not on PATH; remove the memory server with: ${CLAUDE_MCP_REMOVE_LINE}`);
+    return false;
+  }
+  // The file exists: memoryRegistered just read the server from it.
+  const backupId = await step.backups.snapshot([claudeJson(step.home)], "claude mcp for claude-code");
+  try {
+    await step.runCommand("claude", CLAUDE_MCP_REMOVE_ARGS);
+  } catch (error) {
+    step.err(
+      `claude-code: claude mcp remove failed (backup ${backupId}): ${error instanceof Error ? error.message : error}; remove it by hand with: ${CLAUDE_MCP_REMOVE_LINE}`,
+    );
+    return true;
+  }
+  step.out(`claude-code: removed ${MEMORY_SERVER} from Claude Code (backup ${backupId})`);
+  return false;
+}
+
 function execFileAsync(file: string, args: string[], windowsVerbatimArguments = false): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout: 60_000, windowsVerbatimArguments }, (error, stdout, stderr) => {
