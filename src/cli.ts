@@ -378,29 +378,9 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
 
 /** `factory update [--check]`: fast-forward this checkout to origin/main, reinstall changed dependencies, resync. */
 async function updateCommand(check: boolean): Promise<number> {
-  const { execFile } = await import("node:child_process");
-  const { existsSync } = await import("node:fs");
-  const { npmCliScript, runUpdate } = await import("./harness/update.ts");
+  const { realExec, runUpdate } = await import("./harness/update.ts");
   const { HARNESS_DIR } = await import("./harness/rules.ts");
-  const exec = (cmd: string, args: string[], cwd: string) => {
-    let file = cmd;
-    let argv = args;
-    if (cmd === "npm") {
-      // No shell anywhere: run npm's own script with this Node (npmCliScript explains why not "npm" or "npm.cmd").
-      const script = npmCliScript(process.execPath, existsSync);
-      if (!script) return Promise.resolve({ code: 1, stdout: "", stderr: `npm not found next to ${process.execPath}` });
-      file = process.execPath;
-      argv = [script, ...args];
-    }
-    return new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
-      execFile(file, argv, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
-        if (!error) return done({ code: 0, stdout, stderr });
-        // A spawn failure (ENOENT) has a string code and no stderr; the message is the only explanation.
-        const code = typeof error.code === "number" ? error.code : 1;
-        done({ code, stdout, stderr: stderr || error.message });
-      });
-    });
-  };
+  const exec = (cmd: string, args: string[], cwd: string) => realExec(cmd, args, cwd);
   return runUpdate({ factoryHome: resolve(HARNESS_DIR, ".."), execPath: process.execPath, check, exec, out: console.log, err: console.error });
 }
 
