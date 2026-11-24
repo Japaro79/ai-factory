@@ -88,7 +88,9 @@ export async function unregisterMemoryInClaude(step: ClaudeMcpStep): Promise<boo
   try {
     await step.runCommand("claude", CLAUDE_MCP_REMOVE_ARGS);
   } catch (error) {
-    step.err(`claude-code: claude mcp remove failed (backup ${backupId}): ${error instanceof Error ? error.message : error}`);
+    step.err(
+      `claude-code: claude mcp remove failed (backup ${backupId}): ${error instanceof Error ? error.message : error}; remove it by hand with: ${CLAUDE_MCP_REMOVE_LINE}`,
+    );
     return true;
   }
   step.out(`claude-code: removed ${MEMORY_SERVER} from Claude Code (backup ${backupId})`);

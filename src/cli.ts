@@ -369,7 +369,8 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     console.error('setup needs "install", "sync", "uninstall", "doctor" or "restore <backup id>".');
     return 1;
   }
-  // Only the real install and sync run the real `claude mcp add`; setupAgents runs nothing external without these.
+  // Only these real calls run `claude mcp add` (install, sync) or `claude mcp remove` (uninstall); setupAgents runs
+  // nothing external without them.
   const { commandOnPath } = await import("./harness/doctor.ts");
   const { runCommand } = await import("./harness/claudeMcp.ts");
   return setupAgents({ action, agentList, dryRun, home: homedir(), backups, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });

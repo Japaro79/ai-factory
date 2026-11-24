@@ -313,6 +313,36 @@ describe("setup registers the memory server in Claude Code", () => {
     expect(out).toContain("claude-code: claude not on PATH; remove the memory server with: claude mcp remove --scope user ai-factory-memory");
   });
 
+  it("uninstall reports a failed claude mcp remove with its backup id and the manual command, and exits 1", async () => {
+    expect(await run("install", "claude-code")).toBe(0);
+    calls.length = 0;
+    runner = async () => {
+      throw new Error("boom");
+    };
+    expect(await run("uninstall" as "install", "claude-code")).toBe(1);
+    expect(calls).toEqual([["claude", REMOVE_ARGS]]);
+    expect(err).toEqual([
+      expect.stringMatching(/^claude-code: claude mcp remove failed \(backup \S+\): boom; remove it by hand with: claude mcp remove --scope user ai-factory-memory$/),
+    ]);
+    expect(await readFile(claudeJson(), "utf8")).toBe(REGISTERED);
+  });
+
+  it("a retried uninstall still removes the server after the harness files are gone", async () => {
+    expect(await run("install", "claude-code")).toBe(0);
+    runner = async () => {
+      throw new Error("boom");
+    };
+    expect(await run("uninstall" as "install", "claude-code")).toBe(1);
+    calls.length = 0;
+    out.length = 0;
+    err.length = 0;
+    runner = async () => writeFile(claudeJson(), ORIGINAL);
+    expect(await run("uninstall" as "install", "claude-code")).toBe(0);
+    expect(calls).toEqual([["claude", REMOVE_ARGS]]);
+    expect(err).toEqual([]);
+    expect(out).toContainEqual(expect.stringMatching(/^claude-code: removed ai-factory-memory from Claude Code \(backup \S+\)$/));
+  });
+
   it("uninstall runs nothing in Claude Code when the server is not registered", async () => {
     expect(await run("install", "claude-code")).toBe(0);
     await writeFile(claudeJson(), ORIGINAL);

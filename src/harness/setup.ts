@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import type { Backups } from "./backups.ts";
-import { registerMemoryInClaude, unregisterMemoryInClaude, type CommandRunner } from "./claudeMcp.ts";
+import { memoryRegistered, registerMemoryInClaude, unregisterMemoryInClaude, type CommandRunner } from "./claudeMcp.ts";
 import { planHarness, type InstallOptions } from "./install.ts";
 import { AGENTS, applyPlan, harnessInstalled, HARNESS_DIR, type AgentId, type Plan } from "./rules.ts";
 import { planUninstall, pruneEmptyFolders } from "./uninstall.ts";
@@ -34,17 +34,20 @@ export async function setupAgents(run: SetupRun): Promise<number> {
     return 1;
   }
   let agents = requested as AgentId[];
+  let claudeLeftover = false;
   if (run.action !== "install") {
     const uninstall = run.action === "uninstall";
     const installed: AgentId[] = [];
     for (const agent of agents) {
       if (await harnessInstalled(agent, run.home)) installed.push(agent);
+      // A failed `claude mcp remove` leaves the server behind after our files are gone; a retry must still reach it.
+      else if (uninstall && agent === "claude-code" && (await memoryRegistered(run.home))) claudeLeftover = true;
       // Only an agent the user named is worth a line; the rest are simply not theirs.
       else if (run.agentList) {
         run.out(uninstall ? `${agent}: not installed, nothing to remove` : `${agent}: not installed, skipped (install it with: factory setup install --agent ${agent})`);
       }
     }
-    if (!installed.length) {
+    if (!installed.length && !claudeLeftover) {
       run.err(
         `${run.agentList ? "None of the requested agents has" : "No agent has"} the harness installed; ${uninstall ? "nothing to remove." : "run factory setup install first."}`,
       );
@@ -80,6 +83,7 @@ export async function setupAgents(run: SetupRun): Promise<number> {
     keptLines.forEach((line) => run.out(line));
     if (agent === "claude-code" && (await claudeMemoryStep(run))) failed++;
   }
+  if (claudeLeftover && (await claudeMemoryStep(run))) failed++;
   return failed ? 1 : 0;
 }
 
