@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { access, readFile, stat } from "node:fs/promises";
+import { extname, join, posix, win32 } from "node:path";
 import type { Backups } from "./backups.ts";
 import { factoryCommand, MEMORY_SERVER, memoryServerCommandLine } from "./install.ts";
 
@@ -114,9 +114,38 @@ function cmdQuote(arg: string): string {
   return `"${arg}"`;
 }
 
+const RUNNABLE_EXTENSIONS = [".exe", ".cmd", ".bat"];
+
+/**
+ * The file `command` names in the absolute PATH folders, or undefined when none has it. Unlike `where`, which looks in
+ * the current folder first, it never reads the current folder: empty, `.` and other relative PATH entries are skipped,
+ * so a `claude.cmd` planted in the working folder cannot run. On Windows each folder is tried, in PATH order, with the
+ * PATHEXT extensions (default `.COM;.EXE;.BAT;.CMD`) the runner can start: .exe, .cmd and .bat.
+ */
+export async function resolveOnPath(command: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): Promise<string | undefined> {
+  const windows = platform === "win32";
+  const pathApi = windows ? win32 : posix;
+  const folders = ((windows ? (env.PATH ?? env.Path) : env.PATH) ?? "").split(pathApi.delimiter).filter((f) => f !== "" && pathApi.isAbsolute(f));
+  const names = windows
+    ? (env.PATHEXT ?? env.Pathext ?? ".COM;.EXE;.BAT;.CMD")
+        .split(";")
+        .map((ext) => ext.trim().toLowerCase())
+        .filter((ext) => RUNNABLE_EXTENSIONS.includes(ext))
+        .map((ext) => command + ext)
+    : [command];
+  for (const folder of folders) {
+    for (const name of names) {
+      const file = join(folder, name);
+      if (await stat(file).then((s) => s.isFile(), () => false)) return file;
+    }
+  }
+  return undefined;
+}
+
 /**
  * The default runner: execFile, never a shell string. On Windows `claude` is often an npm `.cmd` shim, which execFile
- * cannot start without a shell (Node refuses since CVE-2024-27980). So it resolves the real file with `where` and starts
+ * cannot start without a shell (Node refuses since CVE-2024-27980). So it resolves the real file with `resolveOnPath`
+ * (absolute PATH folders only, never the current folder) and starts
  * an `.exe` directly; for a `.cmd` or `.bat` it runs `cmd.exe /d /v:off /s /c "<quoted line>"` with verbatim arguments:
  * /d skips AutoRun scripts, /v:off stops delayed expansion of !VAR! even when the registry turns it on, /s keeps the
  * outer quotes predictable, and every part is double-quoted (spaces in paths are fine)
@@ -127,8 +156,7 @@ export const runCommand: CommandRunner = async (command, args) => {
     await execFileAsync(command, args);
     return;
   }
-  const found = (await execFileAsync("where", [command])).split(/\r?\n/).map((l) => l.trim());
-  const file = found.find((f) => [".exe", ".cmd", ".bat"].includes(extname(f).toLowerCase()));
+  const file = await resolveOnPath(command, process.env, process.platform);
   if (!file) throw new Error(`${command} not found as an .exe, .cmd or .bat on PATH`);
   if (extname(file).toLowerCase() === ".exe") {
     await execFileAsync(file, args);
