@@ -26,8 +26,8 @@ export interface Block {
 
 /** Antigravity truncates each rule file past this size. */
 const ANTIGRAVITY_MAX_BYTES = 24_000;
-const ANTIGRAVITY_HEADER = "---\ntrigger: always_on\n---\n\n";
-const ANTIGRAVITY_FILE = /^ai-factory-\d\d-[a-z0-9-]+\.md$/;
+export const ANTIGRAVITY_HEADER = "---\ntrigger: always_on\n---\n\n";
+export const ANTIGRAVITY_FILE =/^ai-factory-\d\d-[a-z0-9-]+\.md$/;
 
 /**
  * Reads a shipped harness asset with LF line endings. A checkout with core.autocrlf has CRLF files; without this, the
@@ -100,7 +100,7 @@ async function planAntigravity(dir: string, blocks: Block[]): Promise<Write[]> {
 }
 
 /** Where each agent keeps the rules we install: one instruction file, or (Antigravity) a folder of rule files. */
-function rulesLocation(agent: AgentId, home: string): { file: string } | { dir: string } {
+export function rulesLocation(agent: AgentId, home: string): { file: string } | { dir: string } {
   switch (agent) {
     case "claude-code":
       return { file: join(home, ".claude", "CLAUDE.md") };

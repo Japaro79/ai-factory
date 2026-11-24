@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, type ParseArgsConfig } from "node:util";
 import { JsonlMemory } from "./adapters/memory.ts";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMemoryServer, type MemoryServerOptions } from "./mcp/memoryServer.ts";
@@ -33,9 +33,14 @@ Usage:
                                               Claude Code, Codex, OpenCode and Antigravity, backing up every file.
   factory setup sync [--agent a,b] [--dry-run]  Refresh the harness only where it is already installed, after pulling
                                               factory changes; never installs into a new agent.
+  factory setup uninstall [--agent a,b] [--dry-run]  Remove only our content from the agents that have the harness;
+                                              keeps permission rules and lists the files you modified.
   factory setup doctor [--agent a,b] [--json]  Read-only health check: Node, dependencies, each agent up to date,
                                               memory store, memory MCP in Claude Code, git/gh/codegraph. Exit 1 on fail.
-  factory setup restore <backup id>           Undo a setup install or sync from its backup.
+  factory setup restore <backup id>           Undo a setup install, sync or uninstall from its backup.
+  factory update [--check]                    Update this factory checkout: on a clean main, git pull --ff-only, npm ci
+                                              (only when package.json or the lockfile changed), then setup sync.
+                                              --check only reports commits behind origin/main.
   factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
   factory gate init | run [--no-cache]         Pre-commit review of staged files against the repo rules (AGENTS.md).
@@ -53,39 +58,48 @@ Options:
 
 Nothing is ever merged: each run ends in a pull request that a human reviews.`;
 
+const OPTIONS = {
+  issue: { type: "string" },
+  "task-file": { type: "string" },
+  "dry-run": { type: "boolean", default: false },
+  port: { type: "string", default: "4747" },
+  config: { type: "string" },
+  repo: { type: "string" },
+  project: { type: "string" },
+  text: { type: "string" },
+  name: { type: "string" },
+  agent: { type: "string" },
+  cwd: { type: "string" },
+  lenses: { type: "string" },
+  reason: { type: "string" },
+  "base-ref": { type: "string" },
+  "committed-only": { type: "boolean", default: false },
+  "escalate-item": { type: "string" },
+  "escalate-reason": { type: "string" },
+  consent: { type: "string" },
+  scope: { type: "string" },
+  json: { type: "boolean", default: false },
+  quiet: { type: "boolean", default: false },
+  "no-gitignore": { type: "boolean", default: false },
+  event: { type: "string" },
+  "no-cache": { type: "boolean", default: false },
+  force: { type: "boolean", default: false },
+  check: { type: "boolean", default: false },
+  "no-dashboard": { type: "boolean", default: false },
+  help: { type: "boolean", short: "h" },
+} as const satisfies NonNullable<ParseArgsConfig["options"]>;
+
+/**
+ * Options that are set to something other than their default and are not in `allowed`. Every option is global to
+ * parseArgs, so a command that must not silently ignore one (a --dry-run it does not honor) rejects these.
+ */
+function unsupportedOptions(values: Record<string, unknown>, allowed: readonly string[]): string[] {
+  const defaults: Record<string, { type: string; default?: unknown }> = OPTIONS;
+  return Object.keys(values).filter((name) => !allowed.includes(name) && values[name] !== undefined && values[name] !== defaults[name]?.default);
+}
+
 async function main(): Promise<number> {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      issue: { type: "string" },
-      "task-file": { type: "string" },
-      "dry-run": { type: "boolean", default: false },
-      port: { type: "string", default: "4747" },
-      config: { type: "string" },
-      repo: { type: "string" },
-      project: { type: "string" },
-      text: { type: "string" },
-      name: { type: "string" },
-      agent: { type: "string" },
-      cwd: { type: "string" },
-      lenses: { type: "string" },
-      reason: { type: "string" },
-      "base-ref": { type: "string" },
-      "committed-only": { type: "boolean", default: false },
-      "escalate-item": { type: "string" },
-      "escalate-reason": { type: "string" },
-      consent: { type: "string" },
-      scope: { type: "string" },
-      json: { type: "boolean", default: false },
-      quiet: { type: "boolean", default: false },
-      "no-gitignore": { type: "boolean", default: false },
-      event: { type: "string" },
-      "no-cache": { type: "boolean", default: false },
-      force: { type: "boolean", default: false },
-      "no-dashboard": { type: "boolean", default: false },
-      help: { type: "boolean", short: "h" },
-    },
-  });
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: OPTIONS });
   const command = positionals[0];
   if (values.help || !command) {
     console.log(USAGE);
@@ -182,6 +196,15 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (command === "update") {
+    // Refuse before anything runs: an ignored --dry-run would pull, install and sync for real.
+    const unsupported = unsupportedOptions(values, ["check"]);
+    if (unsupported.length) {
+      console.error(`update does not support ${unsupported.map((name) => `--${name}`).join(", ")}; use "factory update --check" to see what would change`);
+      return 1;
+    }
+    return updateCommand(values.check === true);
+  }
   if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true);
 
   const registry = new ProjectRegistry();
@@ -313,7 +336,7 @@ async function main(): Promise<number> {
   return 1;
 }
 
-/** `factory setup install|sync|doctor|restore`: the harness for each agent, backed up before every write. */
+/** `factory setup install|sync|uninstall|doctor|restore`: the harness for each agent, backed up before every write. */
 async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean, json: boolean): Promise<number> {
   if (action === "doctor") {
     const { commandOnPath, runDoctor } = await import("./harness/doctor.ts");
@@ -342,14 +365,42 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     for (const path of await backups.restore(arg)) console.log(`restored ${path}`);
     return 0;
   }
-  if (action !== "install" && action !== "sync") {
-    console.error('setup needs "install", "sync", "doctor" or "restore <backup id>".');
+  if (action !== "install" && action !== "sync" && action !== "uninstall") {
+    console.error('setup needs "install", "sync", "uninstall", "doctor" or "restore <backup id>".');
     return 1;
   }
   // Only the real install and sync run the real `claude mcp add`; setupAgents runs nothing external without these.
   const { commandOnPath } = await import("./harness/doctor.ts");
   const { runCommand } = await import("./harness/claudeMcp.ts");
   return setupAgents({ action, agentList, dryRun, home: homedir(), backups, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });
+}
+
+/** `factory update [--check]`: fast-forward this checkout to origin/main, reinstall changed dependencies, resync. */
+async function updateCommand(check: boolean): Promise<number> {
+  const { execFile } = await import("node:child_process");
+  const { existsSync } = await import("node:fs");
+  const { npmCliScript, runUpdate } = await import("./harness/update.ts");
+  const { HARNESS_DIR } = await import("./harness/rules.ts");
+  const exec = (cmd: string, args: string[], cwd: string) => {
+    let file = cmd;
+    let argv = args;
+    if (cmd === "npm") {
+      // No shell anywhere: run npm's own script with this Node (npmCliScript explains why not "npm" or "npm.cmd").
+      const script = npmCliScript(process.execPath, existsSync);
+      if (!script) return Promise.resolve({ code: 1, stdout: "", stderr: `npm not found next to ${process.execPath}` });
+      file = process.execPath;
+      argv = [script, ...args];
+    }
+    return new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
+      execFile(file, argv, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+        if (!error) return done({ code: 0, stdout, stderr });
+        // A spawn failure (ENOENT) has a string code and no stderr; the message is the only explanation.
+        const code = typeof error.code === "number" ? error.code : 1;
+        done({ code, stdout, stderr: stderr || error.message });
+      });
+    });
+  };
+  return runUpdate({ factoryHome: resolve(HARNESS_DIR, ".."), execPath: process.execPath, check, exec, out: console.log, err: console.error });
 }
 
 /** One poll at a time across the machine: a scheduled poll can outlast its interval. */

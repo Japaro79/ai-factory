@@ -279,7 +279,11 @@ describe("setup registers the memory server in Claude Code", () => {
   });
 
   it("never registers for an action other than install or sync", async () => {
-    // A future action (uninstall) reaching setupAgents must not touch Claude Code's servers.
+    // Uninstall needs the harness in place, then must not touch Claude Code's servers.
+    expect(await run("install", "claude-code")).toBe(0);
+    calls.length = 0;
+    pathChecks.length = 0;
+    out.length = 0;
     expect(await run("uninstall" as "install", "claude-code")).toBe(0);
     expect(calls).toEqual([]);
     expect(pathChecks).toEqual([]);

@@ -53,17 +53,36 @@ voice block.
 factory setup install --dry-run          # see what would change
 factory setup install                    # every agent; or --agent claude-code,codex
 factory setup sync                       # refresh only the agents already installed (after a pull)
+factory setup uninstall [--dry-run]      # remove the harness from the agents that have it; or --agent codex
 factory setup doctor                     # read-only health check; --json for a machine-readable report
-factory setup restore <backup id>        # undo, with the id printed by install or sync
+factory setup restore <backup id>        # undo, with the id printed by install, sync or uninstall
 ```
 
 `sync` finds the agents that already have the harness by our own markers (an `ai-factory` block in the instruction
 file, or our Antigravity rule files) and never installs into a new one.
 
+`uninstall` acts on the same installed agents, backs up every file first, and removes only our content: the
+`ai-factory` rule blocks (an instruction file left with nothing else stays as an empty file), and our Antigravity rule
+files, skills, subagents, output style and OpenCode plugin while they are still identical to what install writes,
+the hooks carrying our commands, the `ai-factory-memory` MCP entry, our OpenCode agents, the Codex TOML block between
+`# ai-factory:begin mcp` and `# ai-factory:end mcp`, and `outputStyle` when it is `"Mentor"`. It never removes
+permission rules (nobody can tell who added them) nor files you modified: those are listed as `kept modified`. Context7
+entries outside the Codex block stay too. A JSON config with comments or trailing commas is refused for that agent.
+
 `doctor` changes nothing. It checks the Node version, the factory's `node_modules`, whether each installed agent is up to
 date (a warning points to `sync`), the memory store, the `ai-factory-memory` server in Claude Code (with the
 `claude mcp add` command when it is missing) and `git`, `gh` and `codegraph` on PATH. Warnings never fail; any
 failure exits 1.
+
+`factory update` keeps the factory checkout itself current. `factory update --check` fetches `origin/main` and only
+reports `up to date with origin/main` or `N commit(s) behind origin/main` (with `, M ahead` for local commits).
+Without `--check` it refuses a checkout with uncommitted changes or on a branch other than `main`, says
+`already up to date` and runs nothing when there is nothing new, and otherwise runs `git pull --ff-only origin main`,
+then `npm ci` only when the pull changed `package.json` or `package-lock.json` (otherwise it prints
+`dependencies unchanged, skipping npm ci`), then `factory setup sync` as a fresh process so the pulled code does the
+sync; the sync's output and exit code are passed through. The first failing step stops the rest and exits 1 with its
+error. When `npm ci` fails (on Windows a running factory can hold files in `node_modules` open), close the running
+factory processes and run `npm ci` and `factory setup sync` in the checkout by hand.
 
 Install also copies the skills and subagents, registers the `ai-factory-memory` and Context7 MCP servers (Codex,
 OpenCode, Antigravity), adds the session hooks (Checkpoint reminder, skill index refresh, local usage log), merges the

@@ -2,15 +2,15 @@ import { execFile } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import type { Backups } from "./backups.ts";
-import { factoryCommand, memoryServerCommandLine } from "./install.ts";
+import { factoryCommand, MEMORY_SERVER, memoryServerCommandLine } from "./install.ts";
+
+export { MEMORY_SERVER };
 
 /**
  * The memory MCP server in Claude Code. Codex, OpenCode and Antigravity take it from their config files; Claude Code
  * keeps user-scope servers in ~/.claude.json, which it owns, so the factory registers it through `claude mcp add`.
  * Context7 is left out on purpose: many users already have it as a claude.ai connector and it would show up twice.
  */
-
-export const MEMORY_SERVER = "ai-factory-memory";
 
 /** Runs a program without a shell; rejects when it cannot start or exits non-zero. */
 export type CommandRunner = (command: string, args: string[]) => Promise<void>;
