@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import type { Backups } from "./backups.ts";
-import { registerMemoryInClaude, type CommandRunner } from "./claudeMcp.ts";
+import { registerMemoryInClaude, unregisterMemoryInClaude, type CommandRunner } from "./claudeMcp.ts";
 import { planHarness, type InstallOptions } from "./install.ts";
 import { AGENTS, applyPlan, harnessInstalled, HARNESS_DIR, type AgentId, type Plan } from "./rules.ts";
 import { planUninstall, pruneEmptyFolders } from "./uninstall.ts";
@@ -78,8 +78,7 @@ export async function setupAgents(run: SetupRun): Promise<number> {
       run.out(`${agent}: ${changed.length} file(s) changed, backup ${backupId} (undo: factory setup restore ${backupId})`);
     }
     keptLines.forEach((line) => run.out(line));
-    // registerClaudeMemory runs nothing for uninstall: it only acts on install and sync.
-    if (agent === "claude-code" && (await registerClaudeMemory(run))) failed++;
+    if (agent === "claude-code" && (await claudeMemoryStep(run))) failed++;
   }
   return failed ? 1 : 0;
 }
@@ -87,14 +86,16 @@ export async function setupAgents(run: SetupRun): Promise<number> {
 /**
  * Claude Code keeps user MCP servers in ~/.claude.json, so the memory server goes in through its own CLI. The real
  * commands are opt-in: without both hasCommand and runCommand (only the CLI passes them) this step runs nothing, so a
- * caller or test that forgets them can never touch the user's real Claude Code config. Only install and sync register.
+ * caller or test that forgets them can never touch the user's real Claude Code config. Install and sync register the
+ * server; uninstall removes it; nothing else ever reaches `claude`.
  */
-function registerClaudeMemory(run: SetupRun): Promise<boolean> {
-  const action: string = run.action;
-  if ((action !== "install" && action !== "sync") || !run.hasCommand || !run.runCommand) return Promise.resolve(false);
+function claudeMemoryStep(run: SetupRun): Promise<boolean> {
+  if (!run.hasCommand || !run.runCommand) return Promise.resolve(false);
+  const step = run.action === "uninstall" ? unregisterMemoryInClaude : run.action === "install" || run.action === "sync" ? registerMemoryInClaude : undefined;
+  if (!step) return Promise.resolve(false);
   // The same factory checkout planHarness points the other agents at.
   const factoryHome = run.planOptions?.factoryHome ?? resolve(run.planOptions?.harnessDir ?? HARNESS_DIR, "..");
-  return registerMemoryInClaude({
+  return step({
     home: run.home,
     factoryHome,
     dryRun: run.dryRun,

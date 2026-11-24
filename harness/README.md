@@ -68,6 +68,8 @@ the hooks carrying our commands, the `ai-factory-memory` MCP entry, our OpenCode
 `# ai-factory:begin mcp` and `# ai-factory:end mcp`, and `outputStyle` when it is `"Mentor"`. It never removes
 permission rules (nobody can tell who added them) nor files you modified: those are listed as `kept modified`. Context7
 entries outside the Codex block stay too. A JSON config with comments or trailing commas is refused for that agent.
+For Claude Code it also runs `claude mcp remove --scope user ai-factory-memory` after backing up `~/.claude.json`
+(when `claude` is not on PATH it prints that command for you to run).
 
 `doctor` changes nothing. It checks the Node version, the factory's `node_modules`, whether each installed agent is up to
 date (a warning points to `sync`), the memory store, the `ai-factory-memory` server in Claude Code (with the
