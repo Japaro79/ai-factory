@@ -108,7 +108,6 @@ export async function planUninstall(agent: AgentId, home: string, options: Insta
       if (w.content === null) continue;
       const path = join(home, relative(scratch, w.path));
       if ("file" in rules && path === rules.file) writes.push(...(await textEdit(path, removeAllBlocks)));
-      else if ("dir" in rules && dirname(path) === rules.dir) continue; // Antigravity rule files: by name and header below.
       else if (path.endsWith(".json")) writes.push(...(await jsonWrite(path, stripJson(agent, JSON.parse(w.content)))));
       else if (path.endsWith(".toml")) writes.push(...(await textEdit(path, (text) => removeTomlBlock(path, text))));
       else {
@@ -119,10 +118,14 @@ export async function planUninstall(agent: AgentId, home: string, options: Insta
       }
     }
     if ("dir" in rules) {
+      // Antigravity rule files the fresh render has were compared above like any file of ours. One with our name and
+      // header that the render does not have (a part from an older version) has nothing to compare against, so we
+      // cannot prove the user left it alone: keep it and list it.
+      const rendered = new Set(fresh.writes.map((w) => join(home, relative(scratch, w.path))));
       for (const file of (await readdir(rules.dir).catch(() => [] as string[])).sort()) {
         const path = join(rules.dir, file);
-        // Only files we wrote: our name and our header. Anything else in the folder is the user's.
-        if (ANTIGRAVITY_FILE.test(file) && (await readOrUndefined(path))?.startsWith(ANTIGRAVITY_HEADER)) writes.push({ path, content: null });
+        if (rendered.has(path) || !ANTIGRAVITY_FILE.test(file)) continue;
+        if ((await readOrUndefined(path))?.startsWith(ANTIGRAVITY_HEADER)) kept.push(path);
       }
     }
     return { plan: { agent, writes }, kept };

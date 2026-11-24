@@ -62,8 +62,8 @@ factory setup restore <backup id>        # undo, with the id printed by install,
 file, or our Antigravity rule files) and never installs into a new one.
 
 `uninstall` acts on the same installed agents, backs up every file first, and removes only our content: the
-`ai-factory` rule blocks (an instruction file left with nothing else stays as an empty file), our Antigravity rule
-files, the skills, subagents, output style and OpenCode plugin while they are still identical to what install writes,
+`ai-factory` rule blocks (an instruction file left with nothing else stays as an empty file), and our Antigravity rule
+files, skills, subagents, output style and OpenCode plugin while they are still identical to what install writes,
 the hooks carrying our commands, the `ai-factory-memory` MCP entry, our OpenCode agents, the Codex TOML block between
 `# ai-factory:begin mcp` and `# ai-factory:end mcp`, and `outputStyle` when it is `"Mentor"`. It never removes
 permission rules (nobody can tell who added them) nor files you modified: those are listed as `kept modified`. Context7

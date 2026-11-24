@@ -132,6 +132,16 @@ describe("setup uninstall", () => {
     expect(out.slice(1)).toEqual([`claude-code: kept modified ${skill}`]);
   });
 
+  it("keeps and lists an Antigravity rule file the user modified", async () => {
+    await run("install", "antigravity");
+    const dir = join(home, ".gemini", "config", "rules");
+    const file = join(dir, (await readdir(dir)).find((f) => f.startsWith("ai-factory-"))!);
+    await writeFile(file, (await readFile(file, "utf8")) + "user edit\n");
+    expect(await run("uninstall", "antigravity")).toBe(0);
+    expect(await readFile(file, "utf8")).toMatch(/user edit\n$/);
+    expect(out).toContain(`antigravity: kept modified ${file}`);
+  });
+
   it("takes a backup that setup restore uses to bring back the installed state", async () => {
     await seed(".claude/CLAUDE.md", "# Mine\n");
     await run("install");
