@@ -91,7 +91,8 @@ requirements), never what an app does.
 - **Storage.** One append-only file the factory owns: `~/.ai-factory/memory/lessons.jsonl`. No external service.
 - **Shared with your other agents.** `factory mcp` serves the same memory over MCP with two tools,
   `lessons_search` and `lessons_save`. Register it once and every Claude Code session (or any MCP client) can recall
-  the factory's lessons and add its own, which the factory then uses too:
+  the factory's lessons and add its own, which the factory then uses too. `factory setup install` (and `sync`) does
+  this for you when `claude` is on PATH; otherwise run:
 
   ```bash
   claude mcp add --scope user ai-factory-memory -- node <factory>/node_modules/tsx/dist/cli.mjs <factory>/src/cli.ts mcp
@@ -137,8 +138,10 @@ and the shared memory.
 factory setup install --dry-run     # see every file it would change
 factory setup install               # install for all four agents (or --agent claude-code,codex)
 factory setup sync                  # after pulling: refresh only the agents already set up
+factory setup uninstall --dry-run   # see what removing the harness would change (or --agent codex)
+factory setup uninstall             # remove only our content; files you modified are kept and listed
 factory setup doctor                # read-only health check of the setup (exit 1 on a failure)
-factory setup restore <backup id>   # undo one install or sync
+factory setup restore <backup id>   # undo one install, sync or uninstall
 factory update --check              # read-only: how many commits this checkout is behind origin/main
 factory update                      # on a clean main: git pull --ff-only, npm ci if deps changed, setup sync
 ```

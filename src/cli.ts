@@ -33,9 +33,11 @@ Usage:
                                               Claude Code, Codex, OpenCode and Antigravity, backing up every file.
   factory setup sync [--agent a,b] [--dry-run]  Refresh the harness only where it is already installed, after pulling
                                               factory changes; never installs into a new agent.
+  factory setup uninstall [--agent a,b] [--dry-run]  Remove only our content from the agents that have the harness;
+                                              keeps permission rules and lists the files you modified.
   factory setup doctor [--agent a,b] [--json]  Read-only health check: Node, dependencies, each agent up to date,
                                               memory store, memory MCP in Claude Code, git/gh/codegraph. Exit 1 on fail.
-  factory setup restore <backup id>           Undo a setup install or sync from its backup.
+  factory setup restore <backup id>           Undo a setup install, sync or uninstall from its backup.
   factory update [--check]                    Update this factory checkout: on a clean main, git pull --ff-only, npm ci
                                               (only when package.json or the lockfile changed), then setup sync.
                                               --check only reports commits behind origin/main.
@@ -334,7 +336,7 @@ async function main(): Promise<number> {
   return 1;
 }
 
-/** `factory setup install|sync|doctor|restore`: the harness for each agent, backed up before every write. */
+/** `factory setup install|sync|uninstall|doctor|restore`: the harness for each agent, backed up before every write. */
 async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean, json: boolean): Promise<number> {
   if (action === "doctor") {
     const { commandOnPath, runDoctor } = await import("./harness/doctor.ts");
@@ -363,11 +365,14 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     for (const path of await backups.restore(arg)) console.log(`restored ${path}`);
     return 0;
   }
-  if (action !== "install" && action !== "sync") {
-    console.error('setup needs "install", "sync", "doctor" or "restore <backup id>".');
+  if (action !== "install" && action !== "sync" && action !== "uninstall") {
+    console.error('setup needs "install", "sync", "uninstall", "doctor" or "restore <backup id>".');
     return 1;
   }
-  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, out: console.log, err: console.error });
+  // Only the real install and sync run the real `claude mcp add`; setupAgents runs nothing external without these.
+  const { commandOnPath } = await import("./harness/doctor.ts");
+  const { runCommand } = await import("./harness/claudeMcp.ts");
+  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });
 }
 
 /** `factory update [--check]`: fast-forward this checkout to origin/main, reinstall changed dependencies, resync. */

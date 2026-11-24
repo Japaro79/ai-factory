@@ -53,12 +53,21 @@ voice block.
 factory setup install --dry-run          # see what would change
 factory setup install                    # every agent; or --agent claude-code,codex
 factory setup sync                       # refresh only the agents already installed (after a pull)
+factory setup uninstall [--dry-run]      # remove the harness from the agents that have it; or --agent codex
 factory setup doctor                     # read-only health check; --json for a machine-readable report
-factory setup restore <backup id>        # undo, with the id printed by install or sync
+factory setup restore <backup id>        # undo, with the id printed by install, sync or uninstall
 ```
 
 `sync` finds the agents that already have the harness by our own markers (an `ai-factory` block in the instruction
 file, or our Antigravity rule files) and never installs into a new one.
+
+`uninstall` acts on the same installed agents, backs up every file first, and removes only our content: the
+`ai-factory` rule blocks (an instruction file left with nothing else stays as an empty file), and our Antigravity rule
+files, skills, subagents, output style and OpenCode plugin while they are still identical to what install writes,
+the hooks carrying our commands, the `ai-factory-memory` MCP entry, our OpenCode agents, the Codex TOML block between
+`# ai-factory:begin mcp` and `# ai-factory:end mcp`, and `outputStyle` when it is `"Mentor"`. It never removes
+permission rules (nobody can tell who added them) nor files you modified: those are listed as `kept modified`. Context7
+entries outside the Codex block stay too. A JSON config with comments or trailing commas is refused for that agent.
 
 `doctor` changes nothing. It checks the Node version, the factory's `node_modules`, whether each installed agent is up to
 date (a warning points to `sync`), the memory store, the `ai-factory-memory` server in Claude Code (with the
@@ -76,9 +85,15 @@ error. When `npm ci` fails (on Windows a running factory can hold files in `node
 factory processes and run `npm ci` and `factory setup sync` in the checkout by hand.
 
 Install also copies the skills and subagents, registers the `ai-factory-memory` and Context7 MCP servers (Codex,
-OpenCode, Antigravity; register them in Claude Code with `claude mcp add`), adds the session hooks (Checkpoint reminder,
-skill index refresh, local usage log), merges the permission guard without overriding your own rules, and selects the
-Mentor output style in Claude Code. Subagent models can be set per agent in `~/.ai-factory/harness.json`:
+OpenCode, Antigravity), adds the session hooks (Checkpoint reminder, skill index refresh, local usage log), merges the
+permission guard without overriding your own rules, and selects the Mentor output style in Claude Code.
+
+In Claude Code, `install` and `sync` register `ai-factory-memory` at user scope with `claude mcp add --scope user` when
+it is missing and `claude` is on PATH, after backing up `~/.claude.json` (undo with `factory setup restore <id>`).
+Without `claude` on PATH they print the command to run by hand; `--dry-run` only prints it. Context7 is not registered
+in Claude Code: it may already be a claude.ai connector and would show up twice.
+
+Subagent models can be set per agent in `~/.ai-factory/harness.json`:
 
 ```json
 { "agents": { "factory-builder": { "opencode": "openai/gpt-5.5", "claude-code": "opus" } }, "checkpoint": { "model": "claude-sonnet-5-5" } }

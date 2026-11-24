@@ -38,10 +38,12 @@ export interface AgentDef {
 }
 
 const CONTEXT7_URL = "https://mcp.context7.com/mcp";
-const MEMORY_SERVER = "ai-factory-memory";
+export const MEMORY_SERVER = "ai-factory-memory";
 const HOOK_MARK = " check hook";
 const INDEX_MARK = " skills index";
 const USAGE_MARK = " usage record";
+/** Every hook command we add carries one of these; a hook without them is the user's. */
+export const HOOK_MARKS = [HOOK_MARK, INDEX_MARK, USAGE_MARK] as const;
 
 /** A hook that appends one line to the local usage log; async so it never slows the session down. */
 const usageHook = (command: string[], agent: string, event: string) => ({
@@ -124,7 +126,8 @@ const OPENCODE_PERMISSION: Record<Access, Record<string, string>> = {
   write: { task: "deny" },
 };
 
-function factoryCommand(factoryHome: string): string[] {
+/** The program and arguments that run the factory CLI from a checkout, without a shell. */
+export function factoryCommand(factoryHome: string): string[] {
   const home = slash(factoryHome);
   return ["node", `${home}/node_modules/tsx/dist/cli.mjs`, `${home}/src/cli.ts`];
 }
@@ -138,18 +141,21 @@ async function fileWrite(path: string, content: string): Promise<Write[]> {
   return (await readOrUndefined(path)) === content ? [] : [{ path, content }];
 }
 
-/** Merges into a JSON file; writes only when the merged value differs from what is there. */
-async function jsonWrite(path: string, merge: (current: Record<string, any>) => Record<string, any>): Promise<Write[]> {
+/** Reads a JSON config, {} when missing or empty; refuses one we could not rewrite exactly. */
+async function readJsonConfig(path: string): Promise<Record<string, any>> {
   const text = await readOrUndefined(path);
-  let current: Record<string, any> = {};
-  if (text?.trim()) {
-    try {
-      current = JSON.parse(text);
-    } catch {
-      // Never rewrite a file we cannot read exactly: comments or trailing commas would be lost.
-      throw new Error(`${path} is not plain JSON (comments or trailing commas?); remove them or update it by hand, then run setup again.`);
-    }
+  if (!text?.trim()) return {};
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Never rewrite a file we cannot read exactly: comments or trailing commas would be lost.
+    throw new Error(`${path} is not plain JSON (comments or trailing commas?); remove them or update it by hand, then run setup again.`);
   }
+}
+
+/** Merges into a JSON file; writes only when the merged value differs from what is there. */
+export async function jsonWrite(path: string, merge: (current: Record<string, any>) => Record<string, any>): Promise<Write[]> {
+  const current = await readJsonConfig(path);
   const before = JSON.stringify(current);
   const next = merge(structuredClone(current));
   return JSON.stringify(next) === before ? [] : [{ path, content: JSON.stringify(next, null, 2) + "\n" }];
@@ -202,8 +208,8 @@ function mergeGuardRules(current: unknown, guard: Record<string, any>): unknown 
   return merged;
 }
 
-const TOML_BEGIN = "# ai-factory:begin mcp";
-const TOML_END = "# ai-factory:end mcp";
+export const TOML_BEGIN = "# ai-factory:begin mcp";
+export const TOML_END = "# ai-factory:end mcp";
 
 function codexToml(current: string, command: string[]): string {
   const outside = current.replace(new RegExp(`\\n?${TOML_BEGIN}[\\s\\S]*?${TOML_END}\\n?`), "\n").replace(/\n{3,}/g, "\n\n");
