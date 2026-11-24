@@ -1,6 +1,6 @@
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Backups } from "../../src/harness/backups.ts";
 import { setupAgents } from "../../src/harness/setup.ts";
@@ -8,10 +8,21 @@ import { setupAgents } from "../../src/harness/setup.ts";
 let home: string;
 let out: string[];
 let err: string[];
+let calls: [string, string[]][];
+let pathChecks: string[];
+let onPath: boolean;
+let runner: (command: string, args: string[]) => Promise<void>;
+const REGISTERED = JSON.stringify({ mcpServers: { "ai-factory-memory": { command: "node" } } });
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), "factory-setup-"));
   out = [];
   err = [];
+  calls = [];
+  pathChecks = [];
+  onPath = true;
+  runner = async () => {};
+  // Most tests are about the files; the memory server is already registered so `claude` never matters to them.
+  await writeFile(join(home, ".claude.json"), REGISTERED);
 });
 afterEach(async () => {
   await rm(home, { recursive: true, force: true });
@@ -26,6 +37,14 @@ const run = (action: "install" | "sync", agentList?: string, dryRun = false) =>
     home,
     backups: new Backups(join(home, "backups")),
     planOptions: { factoryHome: "/opt/ai-factory", personalFile: join(home, "no-personal.md"), settingsFile: join(home, "no-harness.json") },
+    hasCommand: async (command) => {
+      pathChecks.push(command);
+      return onPath;
+    },
+    runCommand: async (command, args) => {
+      calls.push([command, args]);
+      await runner(command, args);
+    },
     out: (line) => out.push(line),
     err: (line) => err.push(line),
   });
@@ -141,5 +160,140 @@ describe("setup sync", () => {
     expect(await run("sync", undefined, true)).toBe(0);
     expect(out).toContain(`opencode: would write ${agents}`);
     expect(await readFile(agents, "utf8")).toContain("old");
+  });
+});
+
+describe("setup registers the memory server in Claude Code", () => {
+  const MCP_ARGS = ["mcp", "add", "--scope", "user", "ai-factory-memory", "--", "node", "/opt/ai-factory/node_modules/tsx/dist/cli.mjs", "/opt/ai-factory/src/cli.ts", "mcp"];
+  const COMMAND_LINE = 'claude mcp add --scope user ai-factory-memory -- node "/opt/ai-factory/node_modules/tsx/dist/cli.mjs" "/opt/ai-factory/src/cli.ts" mcp';
+  const ORIGINAL = '{\r\n  "mcpServers": { "other": {} },\r\n  "numStartups": 3\r\n}\r\n';
+  const claudeJson = () => join(home, ".claude.json");
+  beforeEach(async () => {
+    await writeFile(claudeJson(), ORIGINAL);
+    // Like the real CLI, a successful add writes the server into ~/.claude.json.
+    runner = async () => writeFile(claudeJson(), REGISTERED);
+  });
+
+  it("runs nothing when the server is already registered", async () => {
+    await writeFile(claudeJson(), REGISTERED);
+    expect(await run("install", "claude-code")).toBe(0);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/^claude-code: \d+ file\(s\) changed/);
+    expect(calls).toEqual([]);
+    expect(pathChecks).toEqual([]);
+  });
+
+  it("runs claude mcp add once, after backing up ~/.claude.json, when it is missing and claude is on PATH", async () => {
+    expect(await run("install", "claude-code")).toBe(0);
+    expect(err).toEqual([]);
+    expect(calls).toEqual([["claude", MCP_ARGS]]);
+    expect(out).toHaveLength(2);
+    const match = /^claude-code: registered ai-factory-memory in Claude Code \(backup (\S+)\)$/.exec(out[1]!);
+    expect(match).not.toBeNull();
+    // The runner replaced the file; the backup still holds the bytes from before it ran.
+    await new Backups(join(home, "backups")).restore(match![1]!);
+    expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
+  });
+
+  it("registers it without a backup when ~/.claude.json does not exist yet", async () => {
+    await rm(claudeJson());
+    expect(await run("install", "claude-code")).toBe(0);
+    expect(calls).toEqual([["claude", MCP_ARGS]]);
+    expect(out[1]).toBe("claude-code: registered ai-factory-memory in Claude Code");
+  });
+
+  it("also registers it on sync", async () => {
+    await writeFile(claudeJson(), REGISTERED);
+    await run("install", "claude-code");
+    await writeFile(claudeJson(), ORIGINAL);
+    out = [];
+    expect(await run("sync")).toBe(0);
+    expect(calls).toEqual([["claude", MCP_ARGS]]);
+    expect(out[0]).toBe("claude-code: up to date");
+    expect(out[1]).toMatch(/^claude-code: registered ai-factory-memory in Claude Code \(backup \S+\)$/);
+  });
+
+  it("prints the command and does not fail when claude is not on PATH", async () => {
+    onPath = false;
+    expect(await run("install", "claude-code")).toBe(0);
+    expect(pathChecks).toEqual(["claude"]);
+    expect(calls).toEqual([]);
+    expect(out[1]).toBe(`claude-code: claude not on PATH; register the memory server with: ${COMMAND_LINE}`);
+    expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
+  });
+
+  it("with --dry-run says what it would run and runs nothing", async () => {
+    expect(await run("install", "claude-code", true)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(pathChecks).toEqual([]);
+    expect(out).toContain(`claude-code: would run ${COMMAND_LINE}`);
+    expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
+    expect(await exists("backups")).toBe(false);
+  });
+
+  it("reports a failing claude mcp add, exits 1 and does not retry", async () => {
+    runner = async () => {
+      throw new Error("boom");
+    };
+    expect(await run("install", "claude-code")).toBe(1);
+    expect(calls).toEqual([["claude", MCP_ARGS]]);
+    expect(err).toHaveLength(1);
+    expect(err[0]).toMatch(/^claude-code: claude mcp add failed \(backup \S+\): boom$/);
+    expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
+  });
+
+  it("runs no external command when the caller passes no runner, even with claude on PATH", async () => {
+    // A fake `claude` first on PATH records any call, so a regression hits the spy, never a real ~/.claude.json.
+    const bin = join(home, "bin");
+    await mkdir(bin);
+    const called = join(bin, "called.json");
+    await writeFile(join(bin, "record.js"), `require("fs").writeFileSync(${JSON.stringify(called)}, JSON.stringify(process.argv.slice(2)));\n`);
+    if (process.platform === "win32") {
+      await writeFile(join(bin, "claude.cmd"), `@echo off\r\nnode "%~dp0record.js" %*\r\n`);
+    } else {
+      await writeFile(join(bin, "claude"), `#!/bin/sh\nexec node "$(dirname "$0")/record.js" "$@"\n`);
+      await chmod(join(bin, "claude"), 0o755);
+    }
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
+    try {
+      const code = await setupAgents({
+        action: "install",
+        agentList: "claude-code",
+        dryRun: false,
+        home,
+        backups: new Backups(join(home, "backups")),
+        planOptions: { factoryHome: "/opt/ai-factory", personalFile: join(home, "no-personal.md"), settingsFile: join(home, "no-harness.json") },
+        out: (line) => out.push(line),
+        err: (line) => err.push(line),
+      });
+      expect(code).toBe(0);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+    expect(await access(called).then(() => true, () => false)).toBe(false);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/^claude-code: \d+ file\(s\) changed/);
+    expect(err).toEqual([]);
+    expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
+  });
+
+  it("never registers for an action other than install or sync", async () => {
+    // A future action (uninstall) reaching setupAgents must not touch Claude Code's servers.
+    expect(await run("uninstall" as "install", "claude-code")).toBe(0);
+    expect(calls).toEqual([]);
+    expect(pathChecks).toEqual([]);
+    expect(out.some((l) => l.includes("ai-factory-memory"))).toBe(false);
+  });
+
+  it("leaves installs for the other agents exactly as before", async () => {
+    expect(await run("install", "codex,opencode,antigravity")).toBe(0);
+    expect(calls).toEqual([]);
+    expect(pathChecks).toEqual([]);
+    expect(out).toHaveLength(3);
+    for (const [i, agent] of ["codex", "opencode", "antigravity"].entries()) {
+      expect(out[i]).toMatch(new RegExp(`^${agent}: \\d+ file\\(s\\) changed, backup \\S+ \\(undo: factory setup restore \\S+\\)$`));
+    }
+    expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
   });
 });

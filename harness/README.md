@@ -66,9 +66,15 @@ date (a warning points to `sync`), the memory store, the `ai-factory-memory` ser
 failure exits 1.
 
 Install also copies the skills and subagents, registers the `ai-factory-memory` and Context7 MCP servers (Codex,
-OpenCode, Antigravity; register them in Claude Code with `claude mcp add`), adds the session hooks (Checkpoint reminder,
-skill index refresh, local usage log), merges the permission guard without overriding your own rules, and selects the
-Mentor output style in Claude Code. Subagent models can be set per agent in `~/.ai-factory/harness.json`:
+OpenCode, Antigravity), adds the session hooks (Checkpoint reminder, skill index refresh, local usage log), merges the
+permission guard without overriding your own rules, and selects the Mentor output style in Claude Code.
+
+In Claude Code, `install` and `sync` register `ai-factory-memory` at user scope with `claude mcp add --scope user` when
+it is missing and `claude` is on PATH, after backing up `~/.claude.json` (undo with `factory setup restore <id>`).
+Without `claude` on PATH they print the command to run by hand; `--dry-run` only prints it. Context7 is not registered
+in Claude Code: it may already be a claude.ai connector and would show up twice.
+
+Subagent models can be set per agent in `~/.ai-factory/harness.json`:
 
 ```json
 { "agents": { "factory-builder": { "opencode": "openai/gpt-5.5", "claude-code": "opus" } }, "checkpoint": { "model": "claude-sonnet-5-5" } }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SqliteNotes } from "../../src/adapters/notes.ts";
 import { Backups } from "../../src/harness/backups.ts";
+import type { CommandRunner } from "../../src/harness/claudeMcp.ts";
 import { runDoctor, type DoctorRun } from "../../src/harness/doctor.ts";
 import { setupAgents } from "../../src/harness/setup.ts";
 
@@ -26,8 +27,20 @@ afterEach(async () => {
 });
 
 const planOptions = () => ({ factoryHome, personalFile: join(root, "no-personal.md"), settingsFile: join(root, "no-harness.json") });
-const install = (agent: string) =>
-  setupAgents({ action: "install", agentList: agent, dryRun: false, home, backups: new Backups(join(root, "backups")), planOptions: planOptions(), out: () => {}, err: () => {} });
+// The fake `claude` registers nothing, so each test decides what ~/.claude.json holds.
+const install = (agent: string, runCommand: CommandRunner = async () => {}) =>
+  setupAgents({
+    action: "install",
+    agentList: agent,
+    dryRun: false,
+    home,
+    backups: new Backups(join(root, "backups")),
+    planOptions: planOptions(),
+    hasCommand: async () => true,
+    runCommand,
+    out: () => {},
+    err: () => {},
+  });
 const registerMemory = () => writeFile(join(home, ".claude.json"), JSON.stringify({ mcpServers: { "ai-factory-memory": { command: "node" } } }));
 
 const doctor = (over: Partial<DoctorRun> = {}) =>
@@ -149,6 +162,19 @@ describe("setup doctor", () => {
     expect(line("claude-mcp")).toBe(
       `warn  claude-mcp   ai-factory-memory not registered at user scope; run: claude mcp add --scope user ai-factory-memory -- node "${cli("node_modules/tsx/dist/cli.mjs")}" "${cli("src/cli.ts")}" mcp`,
     );
+  });
+
+  it("reports the memory server as registered after setup install registered it in Claude Code", async () => {
+    await mkdir(home, { recursive: true });
+    await writeFile(join(home, ".claude.json"), JSON.stringify({ mcpServers: { other: {} } }));
+    const calls: string[][] = [];
+    await install("claude-code", async (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      await registerMemory();
+    });
+    expect(calls).toHaveLength(1);
+    expect(await doctor()).toBe(0);
+    expect(line("claude-mcp")).toBe("ok    claude-mcp   ai-factory-memory registered at user scope");
   });
 
   it("fails without git and warns without gh or codegraph", async () => {
