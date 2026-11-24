@@ -1,6 +1,23 @@
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { join } from "node:path";
 import { npmCliScript, runUpdate, type ExecResult } from "../../src/harness/update.ts";
+
+// Node's own resolution walks up from this file: in CI that finds the repo root's node_modules, and in a git worktree
+// nested inside a checkout without its own node_modules it finds the enclosing checkout's.
+const TSX_CLI = createRequire(import.meta.url).resolve("tsx/cli");
+const CLI = fileURLToPath(new URL("../../src/cli.ts", import.meta.url));
+
+/** Runs the real CLI with only Node's folder on PATH, so even a broken guard cannot reach git or npm. */
+function cliWithoutGit(args: string[]) {
+  const env: NodeJS.ProcessEnv = {};
+  // Windows spells it "Path"; drop every casing so the one PATH below is the only one.
+  for (const [key, value] of Object.entries(process.env)) if (key.toUpperCase() !== "PATH") env[key] = value;
+  env.PATH = dirname(process.execPath);
+  return spawnSync(process.execPath, [TSX_CLI, CLI, ...args], { env, encoding: "utf8" });
+}
 
 const HOME = "/factory";
 const NODE = "/opt/node/bin/node";
@@ -191,6 +208,22 @@ describe("factory update", () => {
     expect(await runUpdate(f.run)).toBe(1);
     expect(f.calls).toEqual([FETCH, BEHIND]);
     expect(f.err).toEqual(["git rev-list failed: fatal: bad revision 'HEAD..origin/main'"]);
+  });
+});
+
+describe("factory update options", () => {
+  it("rejects --dry-run before doing anything, pointing to --check", () => {
+    const result = cliWithoutGit(["update", "--dry-run"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe('update does not support --dry-run; use "factory update --check" to see what would change');
+  });
+
+  it("rejects --agent the same way", () => {
+    const result = cliWithoutGit(["update", "--agent", "x"]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe('update does not support --agent; use "factory update --check" to see what would change');
   });
 });
 

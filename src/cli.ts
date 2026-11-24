@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import { parseArgs, type ParseArgsConfig } from "node:util";
 import { JsonlMemory } from "./adapters/memory.ts";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createMemoryServer, type MemoryServerOptions } from "./mcp/memoryServer.ts";
@@ -56,40 +56,48 @@ Options:
 
 Nothing is ever merged: each run ends in a pull request that a human reviews.`;
 
+const OPTIONS = {
+  issue: { type: "string" },
+  "task-file": { type: "string" },
+  "dry-run": { type: "boolean", default: false },
+  port: { type: "string", default: "4747" },
+  config: { type: "string" },
+  repo: { type: "string" },
+  project: { type: "string" },
+  text: { type: "string" },
+  name: { type: "string" },
+  agent: { type: "string" },
+  cwd: { type: "string" },
+  lenses: { type: "string" },
+  reason: { type: "string" },
+  "base-ref": { type: "string" },
+  "committed-only": { type: "boolean", default: false },
+  "escalate-item": { type: "string" },
+  "escalate-reason": { type: "string" },
+  consent: { type: "string" },
+  scope: { type: "string" },
+  json: { type: "boolean", default: false },
+  quiet: { type: "boolean", default: false },
+  "no-gitignore": { type: "boolean", default: false },
+  event: { type: "string" },
+  "no-cache": { type: "boolean", default: false },
+  force: { type: "boolean", default: false },
+  check: { type: "boolean", default: false },
+  "no-dashboard": { type: "boolean", default: false },
+  help: { type: "boolean", short: "h" },
+} as const satisfies NonNullable<ParseArgsConfig["options"]>;
+
+/**
+ * Options that are set to something other than their default and are not in `allowed`. Every option is global to
+ * parseArgs, so a command that must not silently ignore one (a --dry-run it does not honor) rejects these.
+ */
+function unsupportedOptions(values: Record<string, unknown>, allowed: readonly string[]): string[] {
+  const defaults: Record<string, { type: string; default?: unknown }> = OPTIONS;
+  return Object.keys(values).filter((name) => !allowed.includes(name) && values[name] !== undefined && values[name] !== defaults[name]?.default);
+}
+
 async function main(): Promise<number> {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      issue: { type: "string" },
-      "task-file": { type: "string" },
-      "dry-run": { type: "boolean", default: false },
-      port: { type: "string", default: "4747" },
-      config: { type: "string" },
-      repo: { type: "string" },
-      project: { type: "string" },
-      text: { type: "string" },
-      name: { type: "string" },
-      agent: { type: "string" },
-      cwd: { type: "string" },
-      lenses: { type: "string" },
-      reason: { type: "string" },
-      "base-ref": { type: "string" },
-      "committed-only": { type: "boolean", default: false },
-      "escalate-item": { type: "string" },
-      "escalate-reason": { type: "string" },
-      consent: { type: "string" },
-      scope: { type: "string" },
-      json: { type: "boolean", default: false },
-      quiet: { type: "boolean", default: false },
-      "no-gitignore": { type: "boolean", default: false },
-      event: { type: "string" },
-      "no-cache": { type: "boolean", default: false },
-      force: { type: "boolean", default: false },
-      check: { type: "boolean", default: false },
-      "no-dashboard": { type: "boolean", default: false },
-      help: { type: "boolean", short: "h" },
-    },
-  });
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: OPTIONS });
   const command = positionals[0];
   if (values.help || !command) {
     console.log(USAGE);
@@ -186,7 +194,15 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  if (command === "update") return updateCommand(values.check === true);
+  if (command === "update") {
+    // Refuse before anything runs: an ignored --dry-run would pull, install and sync for real.
+    const unsupported = unsupportedOptions(values, ["check"]);
+    if (unsupported.length) {
+      console.error(`update does not support ${unsupported.map((name) => `--${name}`).join(", ")}; use "factory update --check" to see what would change`);
+      return 1;
+    }
+    return updateCommand(values.check === true);
+  }
   if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true);
 
   const registry = new ProjectRegistry();
