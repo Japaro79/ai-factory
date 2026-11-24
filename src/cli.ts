@@ -346,7 +346,10 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
     console.error('setup needs "install", "sync", "doctor" or "restore <backup id>".');
     return 1;
   }
-  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, out: console.log, err: console.error });
+  // Only the real install and sync run the real `claude mcp add`; setupAgents runs nothing external without these.
+  const { commandOnPath } = await import("./harness/doctor.ts");
+  const { runCommand } = await import("./harness/claudeMcp.ts");
+  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });
 }
 
 /** One poll at a time across the machine: a scheduled poll can outlast its interval. */

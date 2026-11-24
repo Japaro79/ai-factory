@@ -1,6 +1,6 @@
-import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Backups } from "../../src/harness/backups.ts";
 import { setupAgents } from "../../src/harness/setup.ts";
@@ -240,6 +240,50 @@ describe("setup registers the memory server in Claude Code", () => {
     expect(err).toHaveLength(1);
     expect(err[0]).toMatch(/^claude-code: claude mcp add failed \(backup \S+\): boom$/);
     expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
+  });
+
+  it("runs no external command when the caller passes no runner, even with claude on PATH", async () => {
+    // A fake `claude` first on PATH records any call, so a regression hits the spy, never a real ~/.claude.json.
+    const bin = join(home, "bin");
+    await mkdir(bin);
+    const called = join(bin, "called.json");
+    await writeFile(join(bin, "record.js"), `require("fs").writeFileSync(${JSON.stringify(called)}, JSON.stringify(process.argv.slice(2)));\n`);
+    if (process.platform === "win32") {
+      await writeFile(join(bin, "claude.cmd"), `@echo off\r\nnode "%~dp0record.js" %*\r\n`);
+    } else {
+      await writeFile(join(bin, "claude"), `#!/bin/sh\nexec node "$(dirname "$0")/record.js" "$@"\n`);
+      await chmod(join(bin, "claude"), 0o755);
+    }
+    const originalPath = process.env.PATH;
+    process.env.PATH = `${bin}${delimiter}${originalPath ?? ""}`;
+    try {
+      const code = await setupAgents({
+        action: "install",
+        agentList: "claude-code",
+        dryRun: false,
+        home,
+        backups: new Backups(join(home, "backups")),
+        planOptions: { factoryHome: "/opt/ai-factory", personalFile: join(home, "no-personal.md"), settingsFile: join(home, "no-harness.json") },
+        out: (line) => out.push(line),
+        err: (line) => err.push(line),
+      });
+      expect(code).toBe(0);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+    expect(await access(called).then(() => true, () => false)).toBe(false);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatch(/^claude-code: \d+ file\(s\) changed/);
+    expect(err).toEqual([]);
+    expect(await readFile(claudeJson(), "utf8")).toBe(ORIGINAL);
+  });
+
+  it("never registers for an action other than install or sync", async () => {
+    // A future action (uninstall) reaching setupAgents must not touch Claude Code's servers.
+    expect(await run("uninstall" as "install", "claude-code")).toBe(0);
+    expect(calls).toEqual([]);
+    expect(pathChecks).toEqual([]);
+    expect(out.some((l) => l.includes("ai-factory-memory"))).toBe(false);
   });
 
   it("leaves installs for the other agents exactly as before", async () => {

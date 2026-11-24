@@ -89,8 +89,9 @@ function cmdQuote(arg: string): string {
 /**
  * The default runner: execFile, never a shell string. On Windows `claude` is often an npm `.cmd` shim, which execFile
  * cannot start without a shell (Node refuses since CVE-2024-27980). So it resolves the real file with `where` and starts
- * an `.exe` directly; for a `.cmd` or `.bat` it runs `cmd.exe /d /s /c "<quoted line>"` with verbatim arguments: /d skips
- * AutoRun scripts, /s keeps the outer quotes predictable, and every part is double-quoted (spaces in paths are fine)
+ * an `.exe` directly; for a `.cmd` or `.bat` it runs `cmd.exe /d /v:off /s /c "<quoted line>"` with verbatim arguments:
+ * /d skips AutoRun scripts, /v:off stops delayed expansion of !VAR! even when the registry turns it on, /s keeps the
+ * outer quotes predictable, and every part is double-quoted (spaces in paths are fine)
  * after refusing the characters that quoting cannot neutralize.
  */
 export const runCommand: CommandRunner = async (command, args) => {
@@ -106,5 +107,5 @@ export const runCommand: CommandRunner = async (command, args) => {
     return;
   }
   const line = [file, ...args].map(cmdQuote).join(" ");
-  await execFileAsync(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `"${line}"`], true);
+  await execFileAsync(process.env.ComSpec ?? "cmd.exe", ["/d", "/v:off", "/s", "/c", `"${line}"`], true);
 };

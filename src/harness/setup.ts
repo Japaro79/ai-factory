@@ -1,7 +1,6 @@
 import { resolve } from "node:path";
 import type { Backups } from "./backups.ts";
-import { registerMemoryInClaude, runCommand, type CommandRunner } from "./claudeMcp.ts";
-import { commandOnPath } from "./doctor.ts";
+import { registerMemoryInClaude, type CommandRunner } from "./claudeMcp.ts";
 import { planHarness, type InstallOptions } from "./install.ts";
 import { AGENTS, applyPlan, harnessInstalled, HARNESS_DIR, type AgentId, type Plan } from "./rules.ts";
 
@@ -14,9 +13,9 @@ export interface SetupRun {
   home: string;
   backups: Backups;
   planOptions?: InstallOptions;
-  /** Whether a command is on PATH; commandOnPath when absent. */
+  /** Whether a command is on PATH. With runCommand, turns on the Claude Code registration; absent means it is skipped. */
   hasCommand?: (command: string) => Promise<boolean>;
-  /** Runs `claude mcp add`; the real runner when absent. */
+  /** Runs `claude mcp add`. Only the CLI passes the real runner; absent means nothing external runs. */
   runCommand?: CommandRunner;
   out: (line: string) => void;
   err: (line: string) => void;
@@ -68,8 +67,14 @@ export async function setupAgents(run: SetupRun): Promise<number> {
   return failed ? 1 : 0;
 }
 
-/** Claude Code keeps user MCP servers in ~/.claude.json, so the memory server goes in through its own CLI. */
+/**
+ * Claude Code keeps user MCP servers in ~/.claude.json, so the memory server goes in through its own CLI. The real
+ * commands are opt-in: without both hasCommand and runCommand (only the CLI passes them) this step runs nothing, so a
+ * caller or test that forgets them can never touch the user's real Claude Code config. Only install and sync register.
+ */
 function registerClaudeMemory(run: SetupRun): Promise<boolean> {
+  const action: string = run.action;
+  if ((action !== "install" && action !== "sync") || !run.hasCommand || !run.runCommand) return Promise.resolve(false);
   // The same factory checkout planHarness points the other agents at.
   const factoryHome = run.planOptions?.factoryHome ?? resolve(run.planOptions?.harnessDir ?? HARNESS_DIR, "..");
   return registerMemoryInClaude({
@@ -77,8 +82,8 @@ function registerClaudeMemory(run: SetupRun): Promise<boolean> {
     factoryHome,
     dryRun: run.dryRun,
     backups: run.backups,
-    hasCommand: run.hasCommand ?? commandOnPath,
-    runCommand: run.runCommand ?? runCommand,
+    hasCommand: run.hasCommand,
+    runCommand: run.runCommand,
     out: run.out,
     err: run.err,
   });

@@ -36,7 +36,7 @@ const recorded = async () => JSON.parse(await readFile(join(dir, "args.json"), "
 
 describe("the claude command runner", () => {
   it("passes every argument through unchanged, spaces and shell characters included", async () => {
-    const args = ["mcp", "add", "--scope", "user", "ai-factory-memory", "--", "node", "C:/Program Files/a & b (x)/cli.mjs", "x|y<z>^w", "mcp"];
+    const args = ["mcp", "add", "--scope", "user", "ai-factory-memory", "--", "node", "C:/Program Files/a & b (x)/cli.mjs", "x|y<z>^w", "!PATH!", "mcp"];
     await runCommand(FAKE, args);
     expect(await recorded()).toEqual(args);
   });
