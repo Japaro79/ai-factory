@@ -126,7 +126,8 @@ const OPENCODE_PERMISSION: Record<Access, Record<string, string>> = {
   write: { task: "deny" },
 };
 
-function factoryCommand(factoryHome: string): string[] {
+/** The program and arguments that run the factory CLI from a checkout, without a shell. */
+export function factoryCommand(factoryHome: string): string[] {
   const home = slash(factoryHome);
   return ["node", `${home}/node_modules/tsx/dist/cli.mjs`, `${home}/src/cli.ts`];
 }
