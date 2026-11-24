@@ -142,6 +142,37 @@ describe("setup uninstall", () => {
     expect(out).toContain(`antigravity: kept modified ${file}`);
   });
 
+  it("keeps and lists an OpenCode agent entry the user modified, and removes our other agents", async () => {
+    await run("install", "opencode");
+    const file = join(home, ".config", "opencode", "opencode.json");
+    const cfg = JSON.parse(await readFile(file, "utf8"));
+    const ourAgents = Object.keys(cfg.agent);
+    expect(ourAgents).toContain("factory-builder");
+    cfg.agent["factory-builder"].model = "my/model";
+    const edited = structuredClone(cfg.agent["factory-builder"]);
+    await writeFile(file, json(cfg));
+    out = [];
+    expect(await run("uninstall", "opencode")).toBe(0);
+    expect(err).toEqual([]);
+    const after = JSON.parse(await readFile(file, "utf8"));
+    expect(after.agent).toEqual({ "factory-builder": edited });
+    expect(after.mcp?.["ai-factory-memory"]).toBeUndefined();
+    expect(out.slice(1)).toEqual([`opencode: kept modified ${file}#agent.factory-builder`]);
+  });
+
+  it("keeps and lists an ai-factory-memory MCP entry the user modified", async () => {
+    await run("install", "antigravity");
+    const file = join(home, ".gemini", "config", "mcp_config.json");
+    const cfg = JSON.parse(await readFile(file, "utf8"));
+    cfg.mcpServers["ai-factory-memory"].args.push("--verbose");
+    const edited = structuredClone(cfg.mcpServers["ai-factory-memory"]);
+    await writeFile(file, json(cfg));
+    out = [];
+    expect(await run("uninstall", "antigravity")).toBe(0);
+    expect(JSON.parse(await readFile(file, "utf8")).mcpServers["ai-factory-memory"]).toEqual(edited);
+    expect(out).toContain(`antigravity: kept modified ${file}#mcpServers.ai-factory-memory`);
+  });
+
   it("takes a backup that setup restore uses to bring back the installed state", async () => {
     await seed(".claude/CLAUDE.md", "# Mine\n");
     await run("install");
