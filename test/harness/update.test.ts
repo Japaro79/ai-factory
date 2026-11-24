@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { npmCliScript, runUpdate, type ExecResult } from "../../src/harness/update.ts";
+import { npmCliScript, realExec, runUpdate, type ExecResult } from "../../src/harness/update.ts";
 
 // Node's own resolution walks up from this file: in CI that finds the repo root's node_modules, and in a git worktree
 // nested inside a checkout without its own node_modules it finds the enclosing checkout's.
@@ -240,5 +242,52 @@ describe("npmCliScript", () => {
 
   it("returns null when no npm is installed with this node", () => {
     expect(npmCliScript(join("/opt", "node"), () => false)).toBeNull();
+  });
+});
+
+describe("realExec", () => {
+  const cwd = process.cwd();
+
+  it("returns code 0 and the output of a command that succeeds", async () => {
+    const result = await realExec(process.execPath, ["-e", "process.stdout.write('hi')"], cwd);
+    expect(result).toEqual({ code: 0, stdout: "hi", stderr: "" });
+  });
+
+  it("returns the exit code and stderr of a command that fails", async () => {
+    const result = await realExec(process.execPath, ["-e", "process.stderr.write('bad'); process.exit(3)"], cwd);
+    expect(result.code).toBe(3);
+    expect(result.stderr).toContain("bad");
+  });
+
+  it("returns code 1 and the error message when the command cannot start", async () => {
+    const result = await realExec(`no-such-command-${process.pid}-${Date.now()}`, [], cwd);
+    expect(result.code).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toMatch(/ENOENT/);
+  });
+
+  it("runs npm as this node plus npm-cli.js, with the arguments after the script", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "factory-realexec-"));
+    try {
+      const script = join(dir, "npm-cli.js");
+      writeFileSync(script, "process.stdout.write(JSON.stringify({ node: process.execPath, argv: process.argv.slice(1) }));");
+      const result = await realExec("npm", ["ci", "a b&c"], cwd, () => script);
+      expect(result.code).toBe(0);
+      // A shell would split "a b&c"; execFile with no shell passes it through as one argument.
+      expect(JSON.parse(result.stdout)).toEqual({ node: process.execPath, argv: [script, "ci", "a b&c"] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns code 1 when npm is not found next to this node", async () => {
+    const result = await realExec("npm", ["ci"], cwd, () => null);
+    expect(result).toEqual({ code: 1, stdout: "", stderr: `npm not found next to ${process.execPath}` });
+  });
+
+  it("starts the real npm without a shell", async () => {
+    const result = await realExec("npm", ["--version"], cwd);
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
   });
 });

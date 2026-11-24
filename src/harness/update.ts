@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface ExecResult {
@@ -118,4 +120,33 @@ export function npmCliScript(execPath: string, exists: (path: string) => boolean
   const nodeDir = dirname(execPath);
   const candidates = [join(nodeDir, "node_modules", "npm", "bin", "npm-cli.js"), join(nodeDir, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")];
   return candidates.find(exists) ?? null;
+}
+
+/**
+ * The real `UpdateRun.exec`: execFile with no shell. `npm` runs as this Node plus npm's own script (`resolveNpm`, which
+ * defaults to npmCliScript for the running Node). A spawn failure becomes code 1 with its message as stderr.
+ */
+export function realExec(
+  cmd: string,
+  args: string[],
+  cwd: string,
+  resolveNpm: () => string | null = () => npmCliScript(process.execPath, existsSync),
+): Promise<ExecResult> {
+  let file = cmd;
+  let argv = args;
+  if (cmd === "npm") {
+    // No shell anywhere: run npm's own script with this Node (npmCliScript explains why not "npm" or "npm.cmd").
+    const script = resolveNpm();
+    if (!script) return Promise.resolve({ code: 1, stdout: "", stderr: `npm not found next to ${process.execPath}` });
+    file = process.execPath;
+    argv = [script, ...args];
+  }
+  return new Promise<ExecResult>((done) => {
+    execFile(file, argv, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+      if (!error) return done({ code: 0, stdout, stderr });
+      // A spawn failure (ENOENT) has a string code and no stderr; the message is the only explanation.
+      const code = typeof error.code === "number" ? error.code : 1;
+      done({ code, stdout, stderr: stderr || error.message });
+    });
+  });
 }
