@@ -1,6 +1,7 @@
 import { mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { removeAllBlocks } from "./blocks.ts";
 import { HOOK_MARKS, jsonWrite, MEMORY_SERVER, planHarness, TOML_BEGIN, TOML_END, type InstallOptions } from "./install.ts";
 import { ANTIGRAVITY_FILE, ANTIGRAVITY_HEADER, rulesLocation, type AgentId, type Plan, type Write } from "./rules.ts";
@@ -10,12 +11,13 @@ import { ANTIGRAVITY_FILE, ANTIGRAVITY_HEADER, rulesLocation, type AgentId, type
  * goes: our rule blocks, our Antigravity rule files, the skills, subagents, style and plugin files still identical to
  * what install writes, our hooks, the ai-factory-memory MCP entry, our OpenCode agents, the Codex TOML block and an
  * outputStyle of "Mentor". Permission rules stay (nobody can tell who added them), and so does every file the user
- * changed, listed in `kept`.
+ * changed, listed in `kept`. The same holds for the memory MCP entry and our OpenCode agents: one that differs from what
+ * install writes stays and is listed.
  */
 
 export interface UninstallPlan {
   plan: Plan;
-  /** Files of ours the user modified: kept as they are and reported. */
+  /** Files and JSON entries (`<file>#<key>.<name>`) of ours the user modified: kept as they are and reported. */
   kept: string[];
 }
 
@@ -50,8 +52,24 @@ function dropHooks(cfg: Record<string, any>): void {
   });
 }
 
+/**
+ * Deletes the named entries of `key` that still equal (by parsed value, key order ignored) the same entry in the fresh
+ * render. One the user changed stays and is listed in `kept` as `<file>#<key>.<name>`, for example
+ * `<home>/.config/opencode/opencode.json#agent.factory-builder` (the file's full path, then `#`, the top-level key, a
+ * dot and the entry name); every JSON entry we keep uses that format.
+ */
+function dropOurEntries(cfg: Record<string, any>, fresh: Record<string, any>, key: string, names: string[], file: string, kept: string[]): void {
+  const rendered = isObject(fresh[key]) ? fresh[key] : {};
+  dropEntries(cfg, key, (name, value) => {
+    if (!names.includes(name) || !(name in rendered)) return false;
+    if (isDeepStrictEqual(value, rendered[name])) return true;
+    kept.push(`${file}#${key}.${name}`);
+    return false;
+  });
+}
+
 /** What install merged into each agent's JSON config, taken back out; `permissions`/`permission` are never touched. */
-function stripJson(agent: AgentId, fresh: Record<string, any>): (cfg: Record<string, any>) => Record<string, any> {
+function stripJson(agent: AgentId, fresh: Record<string, any>, file: string, kept: string[]): (cfg: Record<string, any>) => Record<string, any> {
   return (cfg) => {
     switch (agent) {
       case "claude-code":
@@ -61,14 +79,12 @@ function stripJson(agent: AgentId, fresh: Record<string, any>): (cfg: Record<str
       case "codex":
         dropHooks(cfg);
         break;
-      case "opencode": {
-        const ours = new Set(Object.keys(fresh.agent ?? {}));
-        dropEntries(cfg, "agent", (name) => ours.has(name));
-        dropEntries(cfg, "mcp", (name) => name === MEMORY_SERVER);
+      case "opencode":
+        dropOurEntries(cfg, fresh, "agent", Object.keys(fresh.agent ?? {}), file, kept);
+        dropOurEntries(cfg, fresh, "mcp", [MEMORY_SERVER], file, kept);
         break;
-      }
       case "antigravity":
-        dropEntries(cfg, "mcpServers", (name) => name === MEMORY_SERVER);
+        dropOurEntries(cfg, fresh, "mcpServers", [MEMORY_SERVER], file, kept);
         break;
     }
     return cfg;
@@ -108,7 +124,7 @@ export async function planUninstall(agent: AgentId, home: string, options: Insta
       if (w.content === null) continue;
       const path = join(home, relative(scratch, w.path));
       if ("file" in rules && path === rules.file) writes.push(...(await textEdit(path, removeAllBlocks)));
-      else if (path.endsWith(".json")) writes.push(...(await jsonWrite(path, stripJson(agent, JSON.parse(w.content)))));
+      else if (path.endsWith(".json")) writes.push(...(await jsonWrite(path, stripJson(agent, JSON.parse(w.content), path, kept))));
       else if (path.endsWith(".toml")) writes.push(...(await textEdit(path, (text) => removeTomlBlock(path, text))));
       else {
         const current = await readOrUndefined(path);
