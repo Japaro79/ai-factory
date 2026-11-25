@@ -37,7 +37,7 @@ describe("loadBlocks", () => {
 
   it("keeps the always-loaded rules within their word budget, so situational procedures live in skills", async () => {
     const words = (await loadBlocks({ withStyle: false, ...isolated() })).reduce((n, b) => n + b.body.split(/\s+/).filter(Boolean).length, 0);
-    expect(words).toBeLessThanOrEqual(5_800);
+    expect(words).toBeLessThanOrEqual(4_300);
   });
 
   it("points only to skills the harness ships", async () => {
