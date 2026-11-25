@@ -20,11 +20,14 @@ Thanks for helping. A few rules keep the factory safe and the repo clean.
 | Check | What it verifies |
 |-------|------------------|
 | `test (<os>, node <22 or 24>)` | `npm ci`, `npm run typecheck` and `npm test` on Ubuntu and Windows, Node 22 and 24 |
-| `PR policy` | At most 400 changed lines, and every linked issue carries `status:approved` |
+| `PR policy` | At most 400 changed lines of production code, and every linked issue carries `status:approved` |
 
-- **Size budget.** A review should fit in about an hour. Over 400 changed lines (additions plus deletions), split the
-  work into stacked PRs. When it truly cannot be split, explain why in the PR and a maintainer may add
-  `size:exception`.
+- **Size budget.** A review should fit in about an hour. Only production code counts: tests and docs written with it
+  are excluded, so the budget never pushes toward fewer tests. Excluded paths: `test/**`, `**/*.test.ts`, `**/*.md`,
+  `docs/**` and `.github/ISSUE_TEMPLATE/**` (a renamed file counts by its new name). Over 400 production lines
+  (additions plus deletions), split the work into stacked PRs. When it truly cannot be split, explain why in the PR and
+  a maintainer may add `size:exception`. The check reports both counts, for example
+  `260 production lines (+200/-60; 620 total)`.
 - **Re-running.** `PR policy` re-runs when the PR is edited, labeled or pushed to. After an issue is approved, re-run the
   check from the PR's Checks tab, or edit the PR description.
 - **Trusted policy.** `PR policy` always runs the script from `main` (`pull_request_target`), never from the PR, so a PR

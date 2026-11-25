@@ -36,4 +36,4 @@ Closes #
 
 <!-- `Risk: none`, or `Risk: item N (reason)` using the high-risk list in CONTRIBUTING.md. -->
 
-<!-- Over 400 changed lines? Split it into stacked PRs, or explain here why it cannot be split and ask for `size:exception`. -->
+<!-- Over 400 changed lines of production code (tests and docs excluded)? Split it into stacked PRs, or explain here why it cannot be split and ask for `size:exception`. -->

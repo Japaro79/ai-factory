@@ -1,25 +1,54 @@
 import { describe, expect, it } from "vitest";
-import { checkIssues, checkSize, classifyGhError, parseIssueRefs, runFromEnv, runPolicy, type GhResult, type IssueFacts } from "../../.github/scripts/pr-policy.ts";
+import { checkIssues, checkSize, classifyGhError, EXCLUDED_PATTERNS, isExcluded, parseIssueRefs, runFromEnv, runPolicy, type GhResult, type IssueFacts } from "../../.github/scripts/pr-policy.ts";
 import { labelCommands } from "../../.github/scripts/sync-labels.ts";
 
 describe("checkSize", () => {
-  it("passes a PR within the 400-line budget", () => {
-    expect(checkSize({ additions: 300, deletions: 100, labels: [] })).toEqual({ ok: true, message: "400 changed lines (+300/-100), within the 400-line budget." });
+  it("passes a PR within the 400-line budget and shows both counts", () => {
+    expect(checkSize({ production: { additions: 200, deletions: 60 }, total: 620, labels: [] })).toEqual({
+      ok: true,
+      message: "260 production lines (+200/-60; 620 total), within the 400-line budget.",
+    });
   });
 
   it("fails a PR over the budget and says how to fix it", () => {
-    const result = checkSize({ additions: 380, deletions: 21, labels: ["type:feature"] });
+    const result = checkSize({ production: { additions: 380, deletions: 21 }, total: 900, labels: ["type:feature"] });
     expect(result.ok).toBe(false);
-    expect(result.message).toBe("401 changed lines (+380/-21) exceed the 400-line budget. Split it into stacked PRs, or ask a maintainer for size:exception.");
+    expect(result.message).toBe("401 production lines (+380/-21; 900 total) exceed the 400-line budget. Split it into stacked PRs, or ask a maintainer for size:exception.");
   });
 
   it("lets size:exception pass an oversized PR with a warning", () => {
-    expect(checkSize({ additions: 700, deletions: 65, labels: ["size:exception"] })).toEqual({
+    expect(checkSize({ production: { additions: 700, deletions: 65 }, total: 765, labels: ["size:exception"] })).toEqual({
       ok: true,
       warning: true,
-      message: "765 changed lines (+700/-65) exceed the 400-line budget; allowed by size:exception.",
+      message: "765 production lines (+700/-65; 765 total) exceed the 400-line budget; allowed by size:exception.",
     });
   });
+});
+
+describe("isExcluded", () => {
+  it("lists the excluded patterns in one place", () => {
+    expect(EXCLUDED_PATTERNS).toEqual(["test/**", "**/*.test.ts", "**/*.md", "docs/**", ".github/ISSUE_TEMPLATE/**"]);
+  });
+
+  it.each([
+    ["test/**", "test/repo/prPolicy.test.ts"],
+    ["test/**", "test/fixtures/a/b.json"],
+    ["**/*.test.ts", "src/cli/setup.test.ts"],
+    ["**/*.test.ts", "root.test.ts"],
+    ["**/*.md", "README.md"],
+    ["**/*.md", "harness/rules/build-flow.md"],
+    ["docs/**", "docs/guide/install.txt"],
+    [".github/ISSUE_TEMPLATE/**", ".github/ISSUE_TEMPLATE/bug_report.yml"],
+  ])("%s excludes %s", (_pattern, filename) => {
+    expect(isExcluded(filename)).toBe(true);
+  });
+
+  it.each([["src/x.ts"], ["src/test/helper.ts"], ["src/x.test.tsx"], ["src/md.ts"], ["documents/x.ts"], ["contest/x.ts"], [".github/scripts/pr-policy.ts"]])(
+    "counts %s as production",
+    (filename) => {
+      expect(isExcluded(filename)).toBe(false);
+    },
+  );
 });
 
 describe("parseIssueRefs", () => {
@@ -77,23 +106,23 @@ describe("runPolicy", () => {
   it("reports both checks and fails when either fails", async () => {
     const lines: string[] = [];
     const ok = await runPolicy({
-      pr: { additions: 10, deletions: 2, labels: [], body: "Closes #1" },
+      pr: { production: { additions: 10, deletions: 2 }, total: 12, labels: [], body: "Closes #1" },
       fetchIssue: async (n) => ({ number: n, found: true, isPullRequest: false, labels: [] }),
       log: (l) => lines.push(l),
     });
     expect(ok).toBe(false);
-    expect(lines).toEqual(["PASS size: 12 changed lines (+10/-2), within the 400-line budget.", "FAIL issue: #1 is not approved (needs status:approved). After a maintainer approves the issue, re-run this check."]);
+    expect(lines).toEqual(["PASS size: 12 production lines (+10/-2; 12 total), within the 400-line budget.", "FAIL issue: #1 is not approved (needs status:approved). After a maintainer approves the issue, re-run this check."]);
   });
 
   it("passes and marks a size exception as a warning", async () => {
     const lines: string[] = [];
     const ok = await runPolicy({
-      pr: { additions: 700, deletions: 65, labels: ["size:exception"], body: "Closes #1" },
+      pr: { production: { additions: 700, deletions: 65 }, total: 765, labels: ["size:exception"], body: "Closes #1" },
       fetchIssue: async (n) => ({ number: n, found: true, isPullRequest: false, labels: ["status:approved"] }),
       log: (l) => lines.push(l),
     });
     expect(ok).toBe(true);
-    expect(lines[0]).toBe("WARN size: 765 changed lines (+700/-65) exceed the 400-line budget; allowed by size:exception.");
+    expect(lines[0]).toBe("WARN size: 765 production lines (+700/-65; 765 total) exceed the 400-line budget; allowed by size:exception.");
     expect(lines[1]).toBe("PASS issue: Linked issue(s) approved: #1.");
   });
 });
@@ -112,6 +141,12 @@ describe("runFromEnv", () => {
   const env = { GITHUB_REPOSITORY: "acme/shop", GITHUB_EVENT_PATH: "/event.json" };
   const event = JSON.stringify({ pull_request: { number: 7, labels: [{ name: "size:exception" }], body: "Closes #99" } });
   const livePr: GhResult = { status: "ok", data: { additions: 10, deletions: 2, labels: [{ name: "type:bug" }], body: "Closes #1" } };
+  const filesPath = (page: number) => `repos/acme/shop/pulls/7/files?per_page=100&page=${page}`;
+  const files = (...entries: Array<[string, number, number]>): GhResult => ({
+    status: "ok",
+    data: entries.map(([filename, additions, deletions]) => ({ filename, additions, deletions, status: "modified" })),
+  });
+  const approvedIssue: GhResult = { status: "ok", data: { labels: [{ name: "status:approved" }] } };
 
   function setup(responses: Record<string, GhResult | Error>, eventText = event) {
     const lines: string[] = [];
@@ -147,40 +182,112 @@ describe("runFromEnv", () => {
   it("reads labels and body from the live PR, not the event payload", async () => {
     const { deps, lines, requested } = setup({
       "repos/acme/shop/pulls/7": livePr,
-      "repos/acme/shop/issues/1": { status: "ok", data: { labels: [{ name: "status:approved" }] } },
+      [filesPath(1)]: files(["src/a.ts", 10, 2]),
+      "repos/acme/shop/issues/1": approvedIssue,
     });
     expect(await runFromEnv(deps)).toBe(true);
-    expect(requested).toEqual(["repos/acme/shop/pulls/7", "repos/acme/shop/issues/1"]);
-    expect(lines).toEqual(["PASS size: 12 changed lines (+10/-2), within the 400-line budget.", "PASS issue: Linked issue(s) approved: #1."]);
+    expect(requested).toEqual(["repos/acme/shop/pulls/7", filesPath(1), "repos/acme/shop/issues/1"]);
+    expect(lines).toEqual(["PASS size: 12 production lines (+10/-2; 12 total), within the 400-line budget.", "PASS issue: Linked issue(s) approved: #1."]);
   });
 
   it("counts a 404 for a linked issue as does not exist, and a linked pull request as not an issue", async () => {
     const { deps, lines, requested } = setup({
       "repos/acme/shop/pulls/7": { status: "ok", data: { additions: 1, deletions: 0, labels: [], body: null } },
+      [filesPath(1)]: files(["src/a.ts", 1, 0]),
     });
     expect(await runFromEnv(deps)).toBe(false);
     expect(lines[1]).toBe('FAIL issue: No linked issue. Add "Closes #N" (or Fixes, Resolves, Refs) to the PR description.');
 
     const second = setup({
       "repos/acme/shop/pulls/7": { status: "ok", data: { additions: 1, deletions: 0, labels: [], body: "Closes #4\nRefs #5" } },
+      [filesPath(1)]: files(["src/a.ts", 1, 0]),
       "repos/acme/shop/issues/4": { status: "not_found" },
       "repos/acme/shop/issues/5": { status: "ok", data: { pull_request: {}, labels: [] } },
     });
     expect(await runFromEnv(second.deps)).toBe(false);
-    expect(second.requested).toEqual(["repos/acme/shop/pulls/7", "repos/acme/shop/issues/4", "repos/acme/shop/issues/5"]);
+    expect(second.requested).toEqual(["repos/acme/shop/pulls/7", filesPath(1), "repos/acme/shop/issues/4", "repos/acme/shop/issues/5"]);
     expect(second.lines).toEqual([
-      "PASS size: 1 changed lines (+1/-0), within the 400-line budget.",
+      "PASS size: 1 production lines (+1/-0; 1 total), within the 400-line budget.",
       "FAIL issue: #4 does not exist in this repository; #5 is a pull request, not an issue. After a maintainer approves the issue, re-run this check.",
     ]);
-    expect(requested).toEqual(["repos/acme/shop/pulls/7"]);
+    expect(requested).toEqual(["repos/acme/shop/pulls/7", filesPath(1)]);
   });
 
   it("fails closed when gh fails for a linked issue, logging nothing", async () => {
     const { deps, lines } = setup({
       "repos/acme/shop/pulls/7": livePr,
+      [filesPath(1)]: files(["src/a.ts", 10, 2]),
       "repos/acme/shop/issues/1": new Error("gh api repos/acme/shop/issues/1 failed: gh: Bad credentials (HTTP 401)"),
     });
     await expect(runFromEnv(deps)).rejects.toThrow("gh api repos/acme/shop/issues/1 failed: gh: Bad credentials (HTTP 401)");
+    expect(lines).toEqual([]);
+  });
+
+  it("passes 300 production lines with 400 test lines, without size:exception", async () => {
+    const { deps, lines } = setup({
+      "repos/acme/shop/pulls/7": livePr,
+      [filesPath(1)]: files(["src/a.ts", 250, 50], ["test/a.test.ts", 380, 0], ["README.md", 15, 5]),
+      "repos/acme/shop/issues/1": approvedIssue,
+    });
+    expect(await runFromEnv(deps)).toBe(true);
+    expect(lines).toEqual(["PASS size: 300 production lines (+250/-50; 700 total), within the 400-line budget.", "PASS issue: Linked issue(s) approved: #1."]);
+  });
+
+  it("fails 401 production lines and shows the production count and the total", async () => {
+    const { deps, lines } = setup({
+      "repos/acme/shop/pulls/7": livePr,
+      [filesPath(1)]: files(["src/a.ts", 380, 21], ["src/a.test.ts", 100, 0]),
+      "repos/acme/shop/issues/1": approvedIssue,
+    });
+    expect(await runFromEnv(deps)).toBe(false);
+    expect(lines).toEqual([
+      "FAIL size: 401 production lines (+380/-21; 501 total) exceed the 400-line budget. Split it into stacked PRs, or ask a maintainer for size:exception.",
+      "PASS issue: Linked issue(s) approved: #1.",
+    ]);
+  });
+
+  it("warns when size:exception allows an oversized PR", async () => {
+    const { deps, lines } = setup({
+      "repos/acme/shop/pulls/7": { status: "ok", data: { additions: 401, deletions: 0, labels: [{ name: "size:exception" }], body: "Closes #1" } },
+      [filesPath(1)]: files(["src/a.ts", 401, 0]),
+      "repos/acme/shop/issues/1": approvedIssue,
+    });
+    expect(await runFromEnv(deps)).toBe(true);
+    expect(lines[0]).toBe("WARN size: 401 production lines (+401/-0; 401 total) exceed the 400-line budget; allowed by size:exception.");
+  });
+
+  it("reads every page of the files list and matches a renamed file on its new name", async () => {
+    const page1 = files(...Array.from({ length: 100 }, (_, i): [string, number, number] => [`src/f${i}.ts`, 2, 1]));
+    const page2: GhResult = {
+      status: "ok",
+      data: [
+        { filename: "docs/moved.ts", previous_filename: "src/moved.ts", additions: 4, deletions: 0, status: "renamed" },
+        { filename: "src/last.ts", additions: 1, deletions: 1, status: "modified" },
+      ],
+    };
+    const { deps, lines, requested } = setup({
+      "repos/acme/shop/pulls/7": livePr,
+      [filesPath(1)]: page1,
+      [filesPath(2)]: page2,
+      "repos/acme/shop/issues/1": approvedIssue,
+    });
+    expect(await runFromEnv(deps)).toBe(true);
+    expect(requested).toEqual(["repos/acme/shop/pulls/7", filesPath(1), filesPath(2), "repos/acme/shop/issues/1"]);
+    expect(lines[0]).toBe("PASS size: 302 production lines (+201/-101; 306 total), within the 400-line budget.");
+  });
+
+  it("fails closed when gh fails for the files list, logging nothing", async () => {
+    const { deps, lines, requested } = setup({
+      "repos/acme/shop/pulls/7": livePr,
+      [filesPath(1)]: new Error(`gh api ${filesPath(1)} failed: gh: Server Error (HTTP 500)`),
+    });
+    await expect(runFromEnv(deps)).rejects.toThrow(`gh api ${filesPath(1)} failed: gh: Server Error (HTTP 500)`);
+    expect([lines, requested]).toEqual([[], ["repos/acme/shop/pulls/7", filesPath(1)]]);
+  });
+
+  it("fails closed when the files list is not found", async () => {
+    const { deps, lines } = setup({ "repos/acme/shop/pulls/7": livePr, [filesPath(1)]: { status: "not_found" } });
+    await expect(runFromEnv(deps)).rejects.toThrow(/^Files of PR #7 not found\.$/);
     expect(lines).toEqual([]);
   });
 
@@ -233,9 +340,9 @@ describe("edge cases found in verification", () => {
     expect(parseIssueRefs(body).map((r) => r.number)).toEqual(numbers);
   });
 
-  it("puts the budget edge at exactly 400 changed lines", () => {
-    expect(checkSize({ additions: 200, deletions: 200, labels: [] }).ok).toBe(true);
-    expect(checkSize({ additions: 200, deletions: 201, labels: [] }).ok).toBe(false);
-    expect(checkSize({ additions: 401, deletions: 0, labels: ["size:exception"] })).toMatchObject({ ok: true, warning: true });
+  it("puts the budget edge at exactly 400 production lines, whatever the total", () => {
+    expect(checkSize({ production: { additions: 200, deletions: 200 }, total: 2000, labels: [] }).ok).toBe(true);
+    expect(checkSize({ production: { additions: 200, deletions: 201 }, total: 401, labels: [] }).ok).toBe(false);
+    expect(checkSize({ production: { additions: 401, deletions: 0 }, total: 401, labels: ["size:exception"] })).toMatchObject({ ok: true, warning: true });
   });
 });
