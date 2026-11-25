@@ -21,7 +21,7 @@ are our own rewrite of its ideas, with our own names and the factory's own tools
 
 | `rules/checkpoint.md` | How and when to run a Checkpoint review |
 | `rules/agent-basics.md` | Artifact language rule appended to every subagent |
-| `checkpoint/` | Checkpoint reviewer, lens, challenger and confirmer prompts, and the commit gate prompt |
+| `checkpoint/` | Checkpoint reviewer, lens, challenger and confirmer prompts, and the commit gate prompt (all installed as `check-*` subagents) |
 | `skills/` | Skills, with shared references in `skills/_common/` |
 | `agents/` | Subagents: `factory-explorer`, `factory-verifier`, `factory-builder`, `crossfire-a`, `crossfire-b`, `crossfire-fixer` (the `check-*` agents are built from `checkpoint/`) |
 | `guard/` | Permission guards: sensitive files and destructive commands |
@@ -98,13 +98,16 @@ in Claude Code: it may already be a claude.ai connector and would show up twice.
 Subagent models can be set per agent in `~/.ai-factory/harness.json`:
 
 ```json
-{ "agents": { "factory-builder": { "opencode": "openai/gpt-5.5", "claude-code": "opus" } }, "checkpoint": { "model": "claude-sonnet-5-5" } }
+{ "agents": { "factory-builder": { "opencode": "openai/gpt-5.5", "claude-code": "opus" } } }
 ```
 
-The `checkpoint` entry only sets the commit gate's reviewer model. Checkpoint reviews themselves call no AI from the
-factory: `factory check review` prints one task per lens, your agent runs its `check-*` subagents (set their models under
+Checkpoint reviews and the commit gate call no AI from the factory, so a `checkpoint` entry is no longer read.
+`factory check review` prints one task per lens, your agent runs its `check-*` subagents (set their models under
 `agents`, like any other subagent), and `factory check capture` validates each JSON result before the outcome is
-decided. The subagents read only the change file the task names, never the live worktree.
+decided. The commit gate works the same way: `factory gate review` prints a `check-gate` task for the staged change,
+and `factory gate capture` validates its result and seals a passed change. The pre-commit hook only checks that seal;
+without one it warns and lets the commit through, unless `.factory/gate.json` sets `"strict": true`. The subagents
+read only the change file the task names, never the live worktree.
 
 Each block sits between `<!-- ai-factory:<name> -->` markers in the agent's instruction file (`~/.claude/CLAUDE.md`,
 `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`), and Antigravity gets one always-on rule file per block in

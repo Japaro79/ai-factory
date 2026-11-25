@@ -175,7 +175,7 @@ const lensTask = (store: CheckStore, p: PendingReview, lens: LensName): ReviewTa
 const missingLenses = (p: PendingReview) => p.lenses.filter((l) => !p.results.some((r) => r.lens === l));
 
 /** A result must echo the nonce of the task it answers; a stale, copied or misrouted result is refused. */
-function checkNonce(expected: string | undefined, nonce: string, printedBy = "factory check review"): void {
+export function checkNonce(expected: string | undefined, nonce: string, printedBy = "factory check review"): void {
   if (!expected || nonce !== expected) {
     throw new Error(`the result does not answer this task (nonce mismatch); rerun the subagent with the task printed by ${printedBy}`);
   }

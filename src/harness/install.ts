@@ -110,6 +110,7 @@ export async function renderAgents(harnessDir: string = HARNESS_DIR): Promise<Ag
   agents.push(
     { name: "check-challenger", description: "Checkpoint challenger: tries to refute inferential severe findings with counter-evidence; read-only.", access: "read", body: `${await check("challenger.md")}\n\n${tail}` },
     { name: "check-confirmer", description: "Checkpoint confirmer: checks the one allowed correction against its blockers only; read-only.", access: "read", body: `${await check("confirmer.md")}\n\n${tail}` },
+    { name: "check-gate", description: "Commit gate: checks one staged change against the repository's rules before a commit; read-only.", access: "read", body: `${await check("gate.md")}\n\n${tail}` },
   );
   return agents;
 }

@@ -30,6 +30,7 @@ describe("renderAgents", () => {
       "check-clarity",
       "check-confirmer",
       "check-failure",
+      "check-gate",
       "check-proof",
       "check-security",
       "crossfire-a",
@@ -44,7 +45,7 @@ describe("renderAgents", () => {
     expect(verifier.body).toContain("## Language of what you produce");
     expect(verifier.body).toContain("## CodeGraph first");
     expect(agents.find((a) => a.name === "check-security")!.body).toContain("**Security lens.**");
-    for (const name of ["check-security", "check-challenger", "check-confirmer"]) {
+    for (const name of ["check-security", "check-challenger", "check-confirmer", "check-gate"]) {
       const body = agents.find((a) => a.name === name)!.body;
       expect(body, name).toMatch(/read\s+only\s+the\s+change\s+file/i); // never the live worktree
       expect(body, name).toContain("exactly one JSON object");
