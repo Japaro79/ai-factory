@@ -44,6 +44,14 @@ describe("renderAgents", () => {
     expect(verifier.body).toContain("## Language of what you produce");
     expect(verifier.body).toContain("## CodeGraph first");
     expect(agents.find((a) => a.name === "check-security")!.body).toContain("**Security lens.**");
+    for (const name of ["check-security", "check-challenger", "check-confirmer"]) {
+      const body = agents.find((a) => a.name === name)!.body;
+      expect(body, name).toMatch(/read\s+only\s+the\s+change\s+file/i); // never the live worktree
+      expect(body, name).toContain("exactly one JSON object");
+    }
+    const confirmer = agents.find((a) => a.name === "check-confirmer")!.body;
+    expect(confirmer).toContain("`onTopic`");
+    expect(confirmer).not.toContain("on_topic");
     for (const a of agents) expect(a.body.toLowerCase()).not.toMatch(/gentle|engram|judgment day/);
   });
 });

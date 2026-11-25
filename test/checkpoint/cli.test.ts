@@ -3,8 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkCommand, checkModel } from "../../src/checkpoint/cli.ts";
-import type { CheckAgents } from "../../src/checkpoint/flow.ts";
+import { checkCommand } from "../../src/checkpoint/cli.ts";
 
 let repo: string;
 let home: string;
@@ -28,12 +27,6 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-const clean: CheckAgents = {
-  review: async (lens) => ({ lens, complete: true, findings: [], inspected: "all" }),
-  challenge: async () => [],
-  confirm: async () => ({ results: [], onTopic: true, offTopicPaths: [] }),
-};
-
 describe("factory check", () => {
   it("assess prints JSON with the risk, whether it is due and the consent question", async () => {
     const r = await checkCommand({ action: "assess", cwd: repo }, { settings });
@@ -49,11 +42,15 @@ describe("factory check", () => {
     expect((await checkCommand({ action: "assess", cwd: repo, escalateItem: "2" }, { settings })).code).toBe(1);
   });
 
-  it("review refuses without the user's consent and a reason, then approves and seals", async () => {
-    const deps = { settings, agents: async () => clean };
+  it("review refuses without the user's consent and a reason, then approves and seals once every lens is captured", async () => {
+    const deps = { settings, stdin: async () => JSON.stringify({ complete: true, inspected: "all", findings: [] }) };
     expect((await checkCommand({ action: "review", cwd: repo, lenses: "security", reason: "r" }, deps)).output).toMatch(/consent/);
     expect((await checkCommand({ action: "review", cwd: repo, lenses: "security", consent: "yes" }, deps)).output).toMatch(/reason/);
-    const ok = await checkCommand({ action: "review", cwd: repo, lenses: "security,proof", reason: "new process call", consent: "yes" }, deps);
+    const started = await checkCommand({ action: "review", cwd: repo, lenses: "security,proof", reason: "new process call", consent: "yes" }, deps);
+    expect(started.code).toBe(2);
+    expect(JSON.parse(started.output)).toMatchObject({ outcome: "review_pending", lenses: ["security", "proof"] });
+    expect((await checkCommand({ action: "capture", cwd: repo, lens: "security" }, deps)).code).toBe(2);
+    const ok = await checkCommand({ action: "capture", cwd: repo, lens: "proof" }, deps);
     expect(ok.code).toBe(0);
     expect(JSON.parse(ok.output)).toMatchObject({ outcome: "approved", lenses: ["security", "proof"] });
     expect(JSON.parse((await checkCommand({ action: "assess", cwd: repo }, { settings })).output).dueReason).toBe("already_reviewed");
@@ -76,12 +73,6 @@ describe("factory check", () => {
   it("prints usage for no action and fails for an unknown one", async () => {
     expect((await checkCommand({ cwd: repo }, { settings })).output).toMatch(/factory check <action>/);
     expect((await checkCommand({ action: "nope", cwd: repo }, { settings })).code).toBe(1);
-  });
-
-  it("reads the reviewer model from the harness settings, with a default", async () => {
-    expect((await checkModel(join(home, "missing.json"))).model).toBe("claude-sonnet-5-5");
-    await writeFile(join(home, "harness.json"), JSON.stringify({ checkpoint: { model: "claude-opus-5-5" } }));
-    expect(await checkModel(join(home, "harness.json"))).toMatchObject({ model: "claude-opus-5-5", effort: "medium" });
   });
 });
 

@@ -151,8 +151,12 @@ factory update                      # on a clean main: git pull --ff-only, npm c
 hook you already had; `git commit --no-verify` skips it once.
 
 Checkpoint is also a command you can run yourself: `factory check assess` rates the current change, and
-`factory check review --lenses security,proof --reason "..." --consent yes` reviews it. See
-[harness/README.md](harness/README.md) for everything it installs.
+`factory check review --lenses security,proof --reason "..." --consent yes` freezes it and prints one task per lens.
+The command calls no AI: your agent runs its installed `check-*` subagents on those tasks, hands each JSON result back
+with `factory check capture --lens <lens> --file <result.json>`, and the command validates them and decides the
+outcome (`approved` and sealed, `correction_required` or `needs_decision`). A challenger round
+(`capture --challenge`) and the confirmation of the one correction (`factory check confirm`, then
+`capture --confirm`) work the same way. See [harness/README.md](harness/README.md) for everything it installs.
 
 ## Where your data lives
 
