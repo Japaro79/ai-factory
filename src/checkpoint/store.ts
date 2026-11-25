@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, mkdir, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { FACTORY_HOME } from "../adapters/projectRegistry.ts";
@@ -154,6 +154,27 @@ export class CheckStore {
   async seal(seal: Seal): Promise<void> {
     await mkdir(this.dir, { recursive: true });
     await appendFile(join(this.dir, "seals.jsonl"), JSON.stringify({ ...seal, sealedAt: seal.sealedAt ?? new Date().toISOString() }) + "\n");
+  }
+
+  /**
+   * Stores what a seal covered, as `receipts/<identity>.json` in the shared folder, beside `seals.jsonl` but apart from
+   * it so the seal lines keep their shape. Written atomically after the seal; identities are hexadecimal hashes.
+   */
+  async writeReceipt(receipt: { identity: string }): Promise<void> {
+    if (!/^[0-9a-f]+$/i.test(receipt.identity)) throw new Error(`not a change identity: ${receipt.identity}`);
+    await writeAtomic(join(this.dir, "receipts", `${receipt.identity}.json`), JSON.stringify(receipt, null, 2) + "\n");
+  }
+
+  /** The receipt of exactly this identity, if one was written. */
+  async receipt<T>(identity: string): Promise<T | undefined> {
+    if (!/^[0-9a-f]+$/i.test(identity)) return undefined;
+    return readJson<T>(join(this.dir, "receipts", `${identity}.json`));
+  }
+
+  /** The identities that have a receipt. */
+  async receiptIds(): Promise<string[]> {
+    const names = await readdir(join(this.dir, "receipts")).catch(() => [] as string[]);
+    return names.filter((n) => /^[0-9a-f]+\.json$/i.test(n)).map((n) => n.slice(0, -".json".length));
   }
 
   async mode(): Promise<Mode> {

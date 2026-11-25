@@ -46,9 +46,9 @@ Usage:
                                               against the repo rules (AGENTS.md) and seals them; the pre-commit hook
                                               only checks the seal (no AI call). Run "factory gate" for its options.
   factory usage [record --agent <a> --event <e>]  Show (or record) the local usage log; nothing leaves the machine.
-  factory check assess|review|capture|confirm|mode|hook  Checkpoint: review a change at the depth its risk
-                                              calls for, with the agent's own check-* subagents (no AI call here).
-                                              Run "factory check" for its options.
+  factory check assess|review|capture|confirm|receipt|mode|hook  Checkpoint: review a change at the depth its
+                                              risk calls for, with the agent's own check-* subagents (no AI call
+                                              here). Run "factory check" for its options.
   factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
 
 Options:
@@ -84,6 +84,7 @@ const OPTIONS = {
   file: { type: "string" },
   challenge: { type: "boolean", default: false },
   confirm: { type: "boolean", default: false },
+  criteria: { type: "string" },
   json: { type: "boolean", default: false },
   quiet: { type: "boolean", default: false },
   "no-gitignore": { type: "boolean", default: false },
@@ -146,6 +147,8 @@ async function main(): Promise<number> {
       file: values.file,
       challenge: values.challenge === true,
       confirm: values.confirm === true,
+      criteria: values.criteria,
+      json: values.json === true,
     });
     if (output) (code === 1 ? console.error : console.log)(output);
     return code;

@@ -34,16 +34,22 @@ Judge by consequence, not by file names or counts:
 Give one `--reason` naming what you touched and how. Meeting the requirements is verification's job before the review;
 never choose lenses to re-check the spec.
 
+To let the reviewers compare the change with what was asked, pass `--criteria <file>`: one acceptance criterion per
+line, the feature document's `S#` lines, or 3 to 5 short lines for small work (at most 12 lines and 4 KB). Every lens
+then answers each criterion with met, not_met or unproven; a criterion any lens finds not met blocks approval like any
+other blocker. Keep the file outside the repository, like result files.
+
 ## Procedure
 
 1. Normalize first: run every formatter or generator that changes files before the review. After the review starts,
    only check-only steps (formatting checks, typecheck, tests) may run; a change of bytes afterwards makes a new change
    that needs its own review.
-2. `factory check review --lenses <a,b> --reason "<what and how>" --consent yes [--base-ref <ref> --committed-only]`
-   freezes the change and prints `review_pending` with one task per lens: its `agent` (`check-<lens>`), the `nonce`,
-   the `changeFile`, the `reason` and the result `schema`. Each worktree keeps its own review in progress.
+2. `factory check review --lenses <a,b> --reason "<what and how>" --consent yes [--base-ref <ref> --committed-only]
+   [--criteria <file>]` freezes the change and prints `review_pending` with one task per lens: its `agent`
+   (`check-<lens>`), the `nonce`, the `changeFile`, the `reason`, the `criteria` when given and the result `schema`.
+   Each worktree keeps its own review in progress.
 3. Run every task's subagent in parallel, in one turn. Give each one its task as printed: the nonce, the change file to
-   read, the reason and the schema. The subagent reads only that file and returns one JSON object that echoes the
+   read, the reason, the criteria and the schema. The subagent reads only that file and returns one JSON object that echoes the
    task's nonce.
 4. Hand each result back unchanged, one per lens: `factory check capture --lens <lens> --file <result.json>` (or the
    JSON on stdin); captures may run at the same time. Keep result files outside the repository: a new file inside it
@@ -66,6 +72,9 @@ never choose lenses to re-check the spec.
 
 Exit codes: 0 means approved, 2 means read `outcome` (a pending task or a decision), 1 means an error or a refused
 result.
+
+Every seal keeps a receipt: `factory check receipt [<identity or prefix>] [--json]` shows what it covered (the lenses,
+each criterion's verdicts, the blockers, the advisories and the outcome); without an id, the latest one.
 
 A seal is per exact content: any later change is a new change. `assess` reports `already_reviewed` for a sealed one;
 do not review it again unless the user explicitly asks for a fresh independent review of new content.
