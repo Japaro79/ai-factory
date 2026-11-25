@@ -194,6 +194,16 @@ export class CheckStore {
     await writeAtomic(join(this.worktreeDir, "pending.json"), JSON.stringify(value, null, 2) + "\n");
   }
 
+  /** The commit gate review in this worktree waiting for its check-gate result through `factory gate capture`. */
+  async pendingGate<T>(): Promise<T | undefined> {
+    return readJson<T>(join(this.worktreeDir, "gate-pending.json"));
+  }
+
+  async setPendingGate(value: unknown | undefined): Promise<void> {
+    if (value === undefined) return this.removeFiles("gate-pending.json");
+    await writeAtomic(join(this.worktreeDir, "gate-pending.json"), JSON.stringify(value, null, 2) + "\n");
+  }
+
   /** Writes a file a subagent task in this worktree reads (the frozen change, a correction) and returns its path. */
   async writeTaskFile(name: string, content: string): Promise<string> {
     const path = join(this.worktreeDir, name);

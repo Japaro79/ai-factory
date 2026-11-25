@@ -146,9 +146,15 @@ factory update --check              # read-only: how many commits this checkout 
 factory update                      # on a clean main: git pull --ff-only, npm ci if deps changed, setup sync
 ```
 
-**Gate** reviews what you are about to commit against the repository's own rules (its `AGENTS.md`, or the file set in
+**Gate** checks what you are about to commit against the repository's own rules (its `AGENTS.md`, or the file set in
 `.factory/gate.json`). Turn it on per repository with `factory gate init`, which adds a pre-commit hook and keeps any
-hook you already had; `git commit --no-verify` skips it once.
+hook you already had. No AI is called by the factory: before committing, your agent runs `factory gate review`, gives
+the printed task to its installed `check-gate` subagent and hands the JSON result back with
+`factory gate capture --file <result.json>`, which seals a passed staged change. The hook (`factory gate run`) only
+checks that exactly the staged change has that seal. Without one (for example, a commit you make from the terminal) it
+blocks the commit and says how to get a seal; set `"strict": false` in `.factory/gate.json` to only warn instead.
+`git commit --no-verify` skips every hook once. The issue factory's own commits skip only the gate: the factory reviews its work
+itself and ends in a pull request that the repository's checks review again.
 
 Checkpoint is also a command you can run yourself: `factory check assess` rates the current change, and
 `factory check review --lenses security,proof --reason "..." --consent yes` freezes it and prints one task per lens.
@@ -173,7 +179,7 @@ The repository holds only the factory. Everything about *your* projects stays on
 | Session memory of each project | `~/.ai-factory/memory/notes.db` (served by `factory mcp`) |
 | Location of this checkout (for launchers) | `~/.ai-factory/home` |
 | Your own rules for the harness | `~/.ai-factory/harness/personal.md` |
-| Harness settings (models per subagent, Checkpoint model) | `~/.ai-factory/harness.json` |
+| Harness settings (models per subagent) | `~/.ai-factory/harness.json` |
 | Backups taken before every `setup install` write | `~/.ai-factory/backups/<id>/` |
 | Checkpoint switch (global) | `~/.ai-factory/check.json`; per repository and seals in `<repo>/.git/factory-check/` |
 | Skill index of a project | `<repo>/.factory/skills.md` |

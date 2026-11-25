@@ -31,7 +31,14 @@ export const confirmSchema = z.object({
   offTopicPaths: z.array(z.string()),
 });
 
-export const jsonSchema = (schema: z.ZodType): unknown => z.toJSONSchema(schema);
+/** The commit gate's verdict on one staged change, checked against the repository's rules. */
+export const gateSchema = z.object({
+  nonce,
+  status: z.enum(["passed", "failed"]),
+  violations: z.array(z.object({ location: z.string(), rule: z.string(), issue: z.string() })),
+});
+
+export const jsonSchema =(schema: z.ZodType): unknown => z.toJSONSchema(schema);
 
 /** Parses one captured result; anything that is not exactly the expected shape is refused with the reason. */
 export function parseResult<T extends z.ZodType>(schema: T, text: string, what: string): z.infer<T> {

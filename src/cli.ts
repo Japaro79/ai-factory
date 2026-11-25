@@ -14,7 +14,6 @@ import { ensureDashboard, systemDashboardDeps } from "./adapters/dashboardLaunch
 import { runTask, type FactoryDeps, type FactorySettings } from "./application/runTask.ts";
 import { loadConfig } from "./config.ts";
 import { startDashboard } from "./dashboard/server.ts";
-import { wire } from "./wire.ts";
 
 const USAGE = `AI Factory v0
 
@@ -43,7 +42,9 @@ Usage:
                                               --check only reports commits behind origin/main.
   factory skills index [--cwd <dir>] [--quiet] [--no-gitignore]  Write .factory/skills.md, the index of installed skills.
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
-  factory gate init | run [--no-cache]         Pre-commit review of staged files against the repo rules (AGENTS.md).
+  factory gate init|review|capture|run         Commit gate: your agent's check-gate subagent checks the staged files
+                                              against the repo rules (AGENTS.md) and seals them; the pre-commit hook
+                                              only checks the seal (no AI call). Run "factory gate" for its options.
   factory usage [record --agent <a> --event <e>]  Show (or record) the local usage log; nothing leaves the machine.
   factory check assess|review|capture|confirm|mode|hook  Checkpoint: review a change at the depth its risk
                                               calls for, with the agent's own check-* subagents (no AI call here).
@@ -184,14 +185,11 @@ async function main(): Promise<number> {
       console.log(done.length ? `Gate: ${done.join(", ")}.` : "Gate: already set up.");
       return 0;
     }
-    if (positionals[1] === "run") {
-      const { checkModel, ClaudeGateReviewer } = await import("./checkpoint/claudeAgents.ts");
-      const r = await gate.runGate(cwd, new ClaudeGateReviewer(await checkModel(), cwd), { noCache: values["no-cache"] === true });
-      (r.code ? console.error : console.log)(r.message);
-      return r.code;
-    }
-    console.error("gate needs init or run [--no-cache].");
-    return 1;
+    // review, capture and run make no AI call; --no-cache is accepted for old hooks and ignored (run only reads seals).
+    const { gateCommand } = await import("./checkpoint/cli.ts");
+    const { code, output, stderr } = await gateCommand({ action: positionals[1], cwd, file: values.file });
+    if (output) (stderr ? console.error : console.log)(output);
+    return code;
   }
 
   if (command === "usage") {
@@ -279,6 +277,7 @@ async function main(): Promise<number> {
       for (const p of projects) {
         console.log(`— ${p.name}`);
         const config = await loadConfig(p.configPath);
+        const { wire } = await import("./wire.ts");
         const { deps, settings } = wire(config, { dryRun: values["dry-run"] === true, runsDir: runsDirFor(p.configPath), projectName: p.name });
         code = Math.max(code, await pollOnce(deps, settings, config.intake.label));
       }
@@ -315,6 +314,8 @@ async function main(): Promise<number> {
   const taskFile = values["task-file"];
   const text = values.text;
   const dryRun = values["dry-run"] === true || taskFile !== undefined;
+  // Only run and poll need the issue factory's AI adapters; every other command starts without loading them.
+  const { wire } = await import("./wire.ts");
   const { deps, settings } = wire(config, { dryRun, taskFile, text, runsDir: runsDirFor(configPath) });
   if (dryRun) console.log("Dry run: nothing will be pushed, opened, labeled or commented on GitHub.");
 

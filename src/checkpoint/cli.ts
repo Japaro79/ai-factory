@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { assess, capture, confirm, review, type CaptureTarget } from "./flow.ts";
+import { captureGate, reviewGate, runGate, UNSEALED_BLOCKED, UNSEALED_WARNING } from "./gate.ts";
 import { handleHook } from "./hook.ts";
 import { CheckStore, DEFAULT_GLOBAL_SETTINGS } from "./store.ts";
 
@@ -120,5 +121,60 @@ export async function checkCommand(args: CheckArgs, deps: CheckDeps = {}): Promi
     }
   } catch (error) {
     return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+export interface GateArgs {
+  action?: string;
+  cwd: string;
+  file?: string;
+}
+
+export interface GateDeps {
+  stdin?: () => Promise<string>;
+  /** The rules file used when the repository has none (default ~/.ai-factory/gate-rules.md). */
+  globalRules?: string;
+}
+
+export const GATE_USAGE = `factory gate <action>
+  init
+      Create .factory/gate.json when missing and add the pre-commit hook, keeping any hook already there.
+  review
+      Freeze the staged change and print the check-gate subagent task (exit 2, outcome gate_pending): the rules and
+      the staged diff of the files under review, a nonce and the result schema. No AI is called. Exit 0 when nothing
+      is left to review after the patterns, or when this staged change is already sealed.
+  capture [--file <result.json>]
+      Hand the check-gate result back (JSON from the file, or stdin). It must match the schema and echo the task's
+      nonce, and the staged change must not have moved since review. passed seals it (exit 0); failed prints the
+      violations (exit 1). A relative --file is read from --cwd.
+  run
+      The pre-commit hook. Calls no AI: it only checks that exactly the staged change is sealed. Without a seal it
+      blocks the commit (exit 1), or only warns (exit 0) when .factory/gate.json has "strict": false.`;
+
+/** Runs one `factory gate` action (init stays in the main CLI) and returns what to print, where, and the exit code. */
+export async function gateCommand(args: GateArgs, deps: GateDeps = {}): Promise<{ code: number; output: string; stderr: boolean }> {
+  const json = (value: unknown, code: number) => ({ code, output: JSON.stringify(value, null, 2), stderr: false });
+  try {
+    switch (args.action) {
+      case "review": {
+        const outcome = await reviewGate(args.cwd, { globalRules: deps.globalRules });
+        return json(outcome, outcome.outcome === "gate_pending" ? 2 : 0);
+      }
+      case "capture": {
+        const text = args.file !== undefined ? await readFile(resolve(args.cwd, args.file), "utf8") : await (deps.stdin ?? readStdin)();
+        const outcome = await captureGate(args.cwd, text);
+        return json(outcome, outcome.outcome === "gate_failed" ? 1 : 0);
+      }
+      case "run": {
+        const r = await runGate(args.cwd);
+        // A missing seal is reported on stderr, whether the commit is blocked or only warned about.
+        return { code: r.code, output: r.message, stderr: r.message === UNSEALED_BLOCKED || r.message === UNSEALED_WARNING };
+      }
+      default:
+        // Like before review and capture existed, a missing or unknown action is an error.
+        return { code: 1, output: GATE_USAGE, stderr: true };
+    }
+  } catch (error) {
+    return { code: 1, output: error instanceof Error ? error.message : String(error), stderr: true };
   }
 }

@@ -70,6 +70,25 @@ result.
 A seal is per exact content: any later change is a new change. `assess` reports `already_reviewed` for a sealed one;
 do not review it again unless the user explicitly asks for a fresh independent review of new content.
 
+## Before committing
+
+When the repository has the commit gate (`factory gate init` added its pre-commit hook), check the staged files before
+every commit you make:
+
+1. Stage exactly what you will commit, then run `factory gate review`. Exit 0 means there is nothing to check or this
+   staged change is already sealed. Exit 2 prints `gate_pending` with one task: its `agent` (`check-gate`), the
+   `nonce`, the `changeFile` (the rules and the staged diff) and the result `schema`.
+2. Run the `check-gate` subagent with its task as printed. It reads only that file and returns one JSON object that
+   echoes the task's nonce.
+3. Hand the result back unchanged: `factory gate capture --file <result.json>` (or the JSON on stdin), with the file
+   outside the repository. `passed` seals this exact staged change and the hook lets the commit through. `failed`
+   exits 1 and lists the violations: fix them, stage again and repeat from step 1. A malformed result, another task's
+   nonce or a staged change that moved since the review is refused and nothing is sealed.
+
+The hook calls no AI: it only checks the seal of exactly the staged change. Without one it blocks the commit, unless
+`.factory/gate.json` sets `"strict": false`, which only warns. So review and capture before every commit you make. The
+gate needs no consent question.
+
 ## Another repository
 
 Review a change in another repository only when the user explicitly authorized it, by passing `--cwd <that repo>` to
