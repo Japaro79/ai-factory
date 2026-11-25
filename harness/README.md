@@ -13,13 +13,14 @@ are our own rewrite of its ideas, with our own names and the factory's own tools
 |------|------------|
 | `rules/voice.md` | How to answer: short, evidence first, one question at a time, skills first |
 | `rules/memory.md` | When to load, save and search the `ai-factory-memory` notes and lessons |
-| `rules/conductor.md` | How the main session works: inline first, delegation triggers, faithful prompts, defect reports |
-| `rules/build-flow.md` | Build Flow: authorize, explore, settle doubts, size, track, build, close; test first; Checkpoint use |
+| `rules/*.md` | Always loaded into every session, so they stay within a word budget (checked in `test/harness/rules.test.ts`); situational procedures live in skills the rules point to |
+| `rules/conductor.md` | How the main session works: inline first, when to delegate, faithful prompts, finding skills |
+| `rules/build-flow.md` | Build Flow: authorize, explore, settle doubts, size, track, build, close; the delegation triggers; test first |
 | `rules/remote-access.md` | Remote work needs its own explicit permission |
 | `rules/codegraph.md` | Use CodeGraph first for structural questions |
 | `output-styles/mentor.md` | The Mentor output style (folded into the voice block for agents without output styles) |
 
-| `rules/checkpoint.md` | How and when to run a Checkpoint review |
+| `rules/checkpoint.md` | When a Checkpoint review or the commit gate applies, and who controls the switch |
 | `rules/agent-basics.md` | Artifact language rule appended to every subagent |
 | `checkpoint/` | Checkpoint reviewer, lens, challenger and confirmer prompts, and the commit gate prompt (all installed as `check-*` subagents) |
 | `skills/` | Skills, with shared references in `skills/_common/` |
@@ -31,6 +32,10 @@ are our own rewrite of its ideas, with our own names and the factory's own tools
 
 | Skill | Use |
 |-------|-----|
+| `feature-flow` | Large Build Flow work: the feature document, resuming, per-commit Checkpoint and delivery |
+| `delegated-writers` | Hand off and check subagents: edit surfaces, parallel writers, Key Learnings |
+| `checkpoint-review` | Run a due Checkpoint review and the commit gate |
+| `factory-defect-report` | Decide whether a failure is a factory defect and report it safely |
 | `commit-slices` | Plan commits as reviewable slices of behavior |
 | `stacked-prs` | Split a large change into stacked or chained PRs |
 | `pr-ready` | Prepare a PR under the destination repository's policy |

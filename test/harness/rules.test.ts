@@ -35,6 +35,31 @@ describe("loadBlocks", () => {
     expect(plain!.body).not.toContain("## Teaching");
   });
 
+  it("keeps the always-loaded rules within their word budget, so situational procedures live in skills", async () => {
+    const words = (await loadBlocks({ withStyle: false, ...isolated() })).reduce((n, b) => n + b.body.split(/\s+/).filter(Boolean).length, 0);
+    expect(words).toBeLessThanOrEqual(5_800);
+  });
+
+  it("points only to skills the harness ships", async () => {
+    const named = new Set<string>();
+    for (const block of await loadBlocks({ withStyle: false, ...isolated() })) {
+      for (const m of block.body.matchAll(/`([a-z0-9-]+)` skill/g)) named.add(m[1]!);
+    }
+    expect([...named].sort()).toEqual(["checkpoint-review", "delegated-writers", "factory-defect-report", "feature-flow"]);
+    for (const name of named) expect(await readFile(join(HARNESS_DIR, "skills", name, "SKILL.md"), "utf8")).toContain(`name: ${name}`);
+  });
+
+  it("keeps each moved rule in exactly one place across the rules and their skills", async () => {
+    const rules = (await loadBlocks({ withStyle: false, ...isolated() })).map((b) => b.body);
+    const skills = await Promise.all(
+      ["feature-flow", "delegated-writers", "checkpoint-review", "factory-defect-report"].map((n) => readFile(join(HARNESS_DIR, "skills", n, "SKILL.md"), "utf8")),
+    );
+    const all = [...rules, ...skills].join("\n").replace(/\s+/g, " ");
+    for (const phrase of ["Allowed edit surfaces` heading", "report_and_continue", "factory check capture --challenge", "factory gate capture --file", "Route record:", "already_reviewed` means this exact range", "Workers that must return strict JSON", "Turn on only that mechanism"]) {
+      expect(all.split(phrase).length - 1, phrase).toBe(1);
+    }
+  });
+
   it("never names the project it is based on inside the rules agents read", async () => {
     for (const block of await loadBlocks({ withStyle: true, ...isolated() })) expect(block.body.toLowerCase()).not.toMatch(/gentle|engram|\bodd\b|\brdd\b/);
   });

@@ -19,14 +19,13 @@ tracking. Run it; never just describe it.
 4. **Size.** Size the task by Task Size below: small when understood, with contained risk, and resumable from the
    original request and `git diff` alone; large only when that resume test fails. Never size by counting files,
    commands, tests, fixes or a requested todo list. Small work stays inline and creates no lasting task artifacts.
-5. **Track before the first write.** For large authorized work, create `flow/<feature-name>.md` and its memory copy
-   (`memory_save` with topic `flow/<feature-name>`) before the first source write, without asking permission for
-   tasks or storage. Tell the user in one line which document was created and how many tasks it has. The document is
-   the specification workers read, in this order: a two- or three-line header; `## Specs` with numbered `S#` quoting
-   the user's exact words, error messages and examples verbatim, never summarized and never adding requirements nobody
-   asked for; `## Tasks` with one line per task (ID, linked `S#`, route, commit); `## Log` last, where `L1` is the
-   user's original request verbatim and later corrections, evidence and decisions are appended. A requirement change
-   appends its verbatim log entry, rewrites only the affected `S#` and reopens only its task.
+5. **Track before the first write.** For large authorized work, load the `feature-flow` skill and create
+   `flow/<feature-name>.md` and its memory copy (`memory_save` with topic `flow/<feature-name>`) before the first
+   source write, without asking permission for tasks or storage. Tell the user in one line which document was created
+   and how many tasks it has. The document is the specification workers read: a short header, `## Specs` with numbered
+   `S#` quoting the user's exact words verbatim (never summarized, never adding requirements nobody asked for),
+   `## Tasks`, and `## Log` last, where `L1` is the user's original request verbatim. The skill holds the full format,
+   requirement changes, resuming, per-commit Checkpoint assessment and the delivery strategy.
 6. **Build task by task.** Hand off by reference, never by paraphrase: name the document, task and specs (for example
    `Spec: flow/<feature>.md, T2, S3-S4`), tell workers to read up to `## Log`, and ask which `S#` they covered.
    Without a document, include the user's request verbatim. A verifier reads the whole document, runs the spec's
@@ -37,10 +36,11 @@ tracking. Run it; never just describe it.
    smallest useful setup, honoring the triggers when they truly hold, with the test-first policy and proportionate
    checks. Tick a task only after its outcome and checks were observed; update the document and its memory copy after
    each task. Commit work units in reviewable slices of about 400 authored changed lines of production code on the
-   feature branch (branch first when on the default branch), tests and docs together with the behavior, with a Conventional Commit message. A
-   unit whose Risk line names a high-risk item gets its own commit so Checkpoint can review it alone; the last slice
-   closes the feature. Record each task's commit in the document as evidence. Work-unit commits on the feature branch
-   are part of authorized large work; push, pull requests and merges stay the user's decisions.
+   feature branch (branch first when on the default branch), tests and docs together with the behavior, with a
+   Conventional Commit message. A unit whose Risk line names a high-risk item gets its own commit so Checkpoint can
+   review it alone; the last slice closes the feature. Record each task's commit in the document as evidence.
+   Work-unit commits on the feature branch are part of authorized large work; push, pull requests and merges stay the
+   user's decisions.
 7. **Close.** Report the verified outcome, every failed, skipped or pending check, and the next step. End every code
    change with its Risk line. Hedged wording is not a stop: a user who says they may stop you or come back later wants
    notes and separate commits. A tracked task ends pending only with the user's explicit stop or one **Needs your
@@ -49,7 +49,8 @@ tracking. Run it; never just describe it.
    item and never the whole accumulated branch, and only while its switch is on.
 
 Resume an interrupted feature with `memory_context`, then `memory_search` for the feature, then `memory_get` for the
-full document copy, then the file itself; reconcile them before continuing with the next unfinished task.
+full document copy, then the file itself; reconcile them (see `feature-flow`) before continuing with the next
+unfinished task.
 
 ## Task Size
 
@@ -93,8 +94,8 @@ trigger. Before writing `Risk: none`, check whether the diff changes code that b
 Once the intent to change is clear, every change takes exactly one route:
 
 - **Inline:** small tasks, and large ones without a writer reason, which follow their document. Decide or verify with
-  one parallel batch of at most 3 calls and about 10k tokens, using bounded searches and line ranges. One understood
-  change stays inline even across files, with its focused test and suite inline.
+  one parallel batch of at most 3 calls and about 10k tokens, using bounded searches and line ranges, not whole large
+  files. One understood change stays inline even across files, with its focused test and suite inline.
 - **Delegated:** understanding that needs more evidence, or more than about 5 sequential lookups, goes to one
   read-only explorer, then you size again; a writer only through the writer trigger.
 - File count, changed lines, size or a feeling of risk never force a heavier route alone. Tests, builds, installs and
@@ -102,42 +103,33 @@ Once the intent to change is clear, every change takes exactly one route:
 
 ## Triggers
 
-Each holds only when its condition truly holds, and then it is mandatory; none holds by default, and when in doubt work
-inline. When one fires, stop and delegate before continuing: carrying on inline past it is a routing mistake even if
-the work succeeds. When it resolves, size the task again and stay small while the three criteria hold.
+Each holds only when its condition truly holds, and then it is mandatory; none holds by default, and when in doubt
+work inline. When one fires, stop and delegate before continuing: carrying on inline past it is a routing mistake even
+if the work succeeds. Turn on only that mechanism; when it resolves, size the task again and stay small while the three
+criteria hold. Before launching any worker, load the `delegated-writers` skill.
 
 - **Ask:** an open product or design decision gets one focused question; stop and wait.
 - **Map:** understanding beyond the inline budget, or more than about 5 sequential lookups, goes to one read-only
   explorer before deciding or writing. It returns at most about 2k tokens with `path:line` evidence; spot-check one
   point and never re-read all of it. Never explore files you will read anyway before writing inline.
 - **Verify:** only a change whose Risk line names a high-risk item gets an independent verifier, after the change's own
-  checks, as rarely as possible. Otherwise whoever made the change runs its focused test and suite inline.
-- **Track:** a large task gets the feature document, its memory copy and work-unit commits.
+  checks, as rarely as possible. A Checkpoint tier, an unclear or failed assessment, or the model that wrote the change
+  never adds one by itself. Otherwise whoever made the change runs its focused test and suite inline.
+- **Track:** a large task gets the feature document, its memory copy and work-unit commits (`feature-flow`).
 - **Writer:** one bounded writer per unit, only for a named reason: (a) parallelism: two or more independent units of
   behavior with disjoint edit surfaces, each needing several minutes (several files or about 100+ changed lines; a
   subagent spends one to two minutes reading first), started together in one turn; (b) context: the long-session
   backstop. A unit is one piece of behavior with its code, tests and docs together; never split one behavior into
   test, docs and code writers; a delivery that depends on another is not independent; small independent changes run
   inline one after another. Units of about 100 changed lines or less always stay inline. Never for size, a large task
-  alone, file count or price. Without a reason, work inline following the document.
-- **Parallel writers:** work in another repository goes into a fresh worktree based on that repository's main branch,
-  never into a checkout someone else may use. Parallel units in the same repository share the tree, each with a
-  declared disjoint edit surface: you own git; writers run no repository-wide formatters, generators or installs; a
-  shared file has one owner or you edit it at the end; you check each writer's diff against its surface before
-  accepting it; one seam check (the full suite, once) runs at the end. Units that need the same file use separate
-  worktrees.
-- **Invariants:** each writer prompt names the existing helpers its unit must reuse for shared state (for example the
-  function other commands use to add an entry) and the invariants they keep (order, uniqueness, validation,
-  normalization). Parallel units cannot see each other, so the prompt is the only place they learn this. Whoever
-  writes reuses the existing function for shared state and never re-implements it differently.
+  alone, file count or price. Without a reason, work inline following the document. Parallel writers and the
+  invariants each writer prompt must name follow `delegated-writers`.
 - **Prepare:** when a write is delegated, the reading that prepares it, broad research and context compression go with
   it or before it, not into the main context. Inline writes read inline.
 - **Output budget:** keep your own shell output to counts, `--stat`, tails or summaries; on a large task, delegate long
   suites and builds and get back short observed results, failures included.
 - **Long session:** around 150k tokens of main context, pause and delegate the next bounded unit. Guidance only;
-  nothing measures it.
-- **Route record:** for large work, record each task's route (inline or delegated) and the trigger evidence in the
-  document, so skipped delegation is visible.
+  nothing measures or enforces it, so never claim it does.
 
 ## Details
 
@@ -160,35 +152,11 @@ the work succeeds. When it resolves, size the task again and stay small while th
   without hard limits, and keep the test-first policy, Checkpoint, safety and consent requirements.
 - About 400 authored changed lines per task (additions plus deletions) is a planning hint, never an acceptance
   criterion, cap, stop or forced split, and never a Checkpoint trigger. The count is production code only: the tests
-  and docs written with it are excluded, so the hint never pushes toward fewer tests. Prefer the smallest coherent behavior with its
-  tests and docs. If the right solution is bigger, say why briefly and continue. Never remove spaces, blank lines or
-  comments to save lines, never skip tests, minify, add needless abstractions or split artificially. Pass this same
-  hint to workers. A line limit from the user is a ceiling, not an exact target; never invent acceptance gates.
-- The feature document `flow/<feature-name>.md` and its memory copy (topic `flow/<feature-name>`, current project)
-  share one identity per feature, with a descriptive file-safe name; never overwrite another feature, and keep one
-  document, not a separate plan. Fixed order, stable content first and the growing log last: a header of two or three
-  lines (objective, branch, delivery strategy, test runner); `## Specs` with numbered `S1..Sn` requirements, scope,
-  acceptance criteria and checks, quoting the user's strings, error messages, commands and examples verbatim in their
-  language (numbered and ordered, never summarized or reworded, no added requirements, assumptions marked as such);
-  `## Tasks` with stable IDs, linked `S#`, route, status and commit or RED/GREEN evidence; `## Log` where `L1` is the
-  original request verbatim, later corrections are logged verbatim with their date, and analysis, reasons for
-  meaningful changes, verification evidence, progress and next step are appended. Keep routine corrections brief. The
-  memory copy holds the full current document and its repository path, not just a summary.
-- Accepted changes from the user, a review or a verification update the affected intent and tasks only: append the
-  verbatim log entry, rewrite only the affected `S#`, reopen only its linked task, keep valid and unrelated work, add
-  new tasks or reopen invalid ones with a reason, and revise their checks. Findings alone never widen scope or accept
-  themselves; business scope changes need the user. Tick only observed outcomes with proof; record failed,
-  unavailable, skipped or pending checks honestly. A tick grants no approval.
-- Read both writes back with the normal read tool; they are not atomic, but never write comparison scripts or gates
-  for them. After a partial failure, check which writes landed and continue from there; never replay one that landed.
-  The file is the source: a memory copy that differs is refreshed from the file, never a blocker. Refresh the copy at
-  each task transition (start, finish, block, reopen, drop), on a material plan change and at the close; log entries in
-  between go to the file only. If memory is unavailable, keep working, mark the copy pending and resync later; never
-  claim it succeeded. If writing the file is unsafe or impossible, keep the existing state and report it. On
-  irreconcilable edits keep both versions and ask only about the real conflict.
-- Before implementing or resuming, read the actual file and the full memory copy, reconcile them, and pass workers the
-  path, task IDs and linked `S#`; workers read the document up to `## Log` before editing and report the `S#` they
-  covered. Small work without a document still gets its authorized scope and checks.
+  and docs written with it are excluded, so the hint never pushes toward fewer tests. Prefer the smallest coherent
+  behavior with its tests and docs. If the right solution is bigger, say why briefly and continue. Never remove spaces,
+  blank lines or comments to save lines, never skip tests, minify, add needless abstractions or split artificially.
+  Pass this same hint to workers. A line limit from the user is a ceiling, not an exact target; never invent
+  acceptance gates.
 - **Test first.** For a behavior change with a relevant runnable deterministic test and a clear expected outcome: see
   it fail (RED), implement (GREEN), then refactor with tests green. One RED test per requested rule. For every existing
   command or option the change touches, add one test proving its previous behavior still holds, and no other cases. An
@@ -203,41 +171,4 @@ the work succeeds. When it resolves, size the task again and stay small while th
   worktree in a `mktemp -d` folder; if it must live inside, use a git-ignored path and remove it before finishing.
   Workers never delete scratch: they report exact paths and you remove them, including paths a verifier reports. Pass
   the runner, this discipline and the evidence or exception to workers; never invent RED/GREEN evidence or a runner.
-- Run the applicable functional checks per task, not a review per todo item. Checkpoint reviews a work-unit commit or
-  PR slice. After each work-unit commit, with Checkpoint on, run
-  `factory check assess --cwd <repo> --base-ref <last reviewed boundary> --committed-only --json` and read `due` and
-  `dueReason`. When `due` is true (`high_risk`), or the user asks for a review, follow Checkpoint's procedure for that
-  range; the reviewed boundary moves to this commit once its review is sealed. When `due` is false, record the reason
-  and continue: `passive` needs no review and moves the boundary; `under_budget` stays pending until a later commit
-  reaches the budget; `already_reviewed` means this exact range is already sealed. When a high-risk unit follows
-  pending `under_budget` commits, assess the open slice first, and review it only when due or asked. A task boundary
-  never authorizes a review or moves a boundary. The first boundary is the branch point; each sealed boundary is the
-  next base. Record per commit the tier and outcome: granted, declined, passive, under budget, already reviewed or
-  unavailable. An unavailable or failed assessment never lowers the tier: report the missing proof and never guess
-  `due`. Never skip an existing delivery gate.
-- **Delivery.** When creating the document, forecast authored changed lines (additions plus deletions; tests, docs
-  and generated files excluded) from the task list, and keep a running count from work-unit commits. Pick one strategy per feature:
-  `ask-on-risk` (default), `auto-chain`, `single-pr` or `exception-ok`. When the forecast or the count passes about 400
-  lines, apply it before the next commit: `ask-on-risk` asks once for the chain strategy (`stacked-to-main` or
-  `feature-branch-chain`); `auto-chain` asks only for a missing chain strategy and slices on its own. Remember both
-  choices and record slice boundaries (which commits each PR holds) in the document. Resolve the `commit-slices` and
-  `stacked-prs` skills from the skill index before planning or creating a pull request; never hard-code their paths.
-- With Checkpoint on, first use its risk assessment (`factory check assess --cwd <repo> --json`). Passive or low: quiet
-  structural checks, no reviewer, no consent. Medium or high: ask the user's consent only when `due` is true or the
-  user asks, and follow the returned plan; the review runs only on a yes, and a no continues under normal policy. Never
-  lower a tier with your own judgment, task size or defect severity, and never infer low risk from a failed
-  assessment. You may raise a change you know is high risk with `--escalate-item <1-6> --escalate-reason "<line>"`.
-  With Checkpoint off, do not start or offer reviews; normal checks remain.
-
-## Checkpoint belongs to the user
-
-The user controls Checkpoint with `factory check mode on|off|status`.
-
-- **On by default.** An unset preference allows reviews without recording any decision; an explicit global or
-  per-repository "off" always wins. Consent for each change is separate from the switch.
-- `status` only reads: it shows which setting decided and the effective mode. A `default` source means nobody chose,
-  so it is on.
-- When the user asks to stop using Checkpoint, run `factory check mode off`. Do not argue, work around it or offer
-  alternatives first.
-- While off, keep building normally, inline or delegated: start no reviews, do not retry or re-enable them.
-- Never switch it on or off by yourself, and never turn it on for the user unless they ask.
+- Small work without a document still gets its authorized scope and checks.
