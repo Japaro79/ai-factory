@@ -40,15 +40,17 @@ never choose lenses to re-check the spec.
    only check-only steps (formatting checks, typecheck, tests) may run; a change of bytes afterwards makes a new change
    that needs its own review.
 2. `factory check review --lenses <a,b> --reason "<what and how>" --consent yes [--base-ref <ref> --committed-only]`
-   freezes the change and prints `review_pending` with one task per lens: its `agent` (`check-<lens>`), the
-   `changeFile`, the `reason` and the result `schema`.
-3. Run every task's subagent in parallel, in one turn. Give each one its task as printed: the change file to read, the
-   reason and the schema. The subagent reads only that file and returns one JSON object.
+   freezes the change and prints `review_pending` with one task per lens: its `agent` (`check-<lens>`), the `nonce`,
+   the `changeFile`, the `reason` and the result `schema`. Each worktree keeps its own review in progress.
+3. Run every task's subagent in parallel, in one turn. Give each one its task as printed: the nonce, the change file to
+   read, the reason and the schema. The subagent reads only that file and returns one JSON object that echoes the
+   task's nonce.
 4. Hand each result back unchanged, one per lens: `factory check capture --lens <lens> --file <result.json>` (or the
-   JSON on stdin). Keep result files outside the repository: a new file inside it changes the frozen change. A
-   malformed result is refused with the reason and nothing is stored; rerun that subagent once. If the change moved
-   since the review, capture refuses: run `review` again. A `review_pending` reply that lists a lens task again asks for
-   its one retry; otherwise it only names the lenses still `missing`.
+   JSON on stdin); captures may run at the same time. Keep result files outside the repository: a new file inside it
+   changes the frozen change. A malformed result, or one without its task's nonce, is refused with the reason and
+   nothing is stored; rerun that subagent once with the task as printed. If the change moved since the review, capture
+   refuses: run `review` again. A `review_pending` reply that lists a lens task again asks for its one retry, with a new
+   nonce; otherwise it only names the lenses still `missing`.
 5. When a capture prints a `check-challenger` task, run it the same way and capture it with
    `factory check capture --challenge --file <result.json>`. The challenger judges only the inferential severe findings.
 6. Read `outcome`:

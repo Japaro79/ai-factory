@@ -43,13 +43,18 @@ describe("factory check", () => {
   });
 
   it("review refuses without the user's consent and a reason, then approves and seals once every lens is captured", async () => {
-    const deps = { settings, stdin: async () => JSON.stringify({ complete: true, inspected: "all", findings: [] }) };
+    // Like a host agent, each result echoes the nonce of the task it answers.
+    let nonce = "";
+    const deps = { settings, stdin: async () => JSON.stringify({ nonce, complete: true, inspected: "all", findings: [] }) };
+    const nonceOf = (output: string, lens: string) => (JSON.parse(output).tasks as Array<{ lens: string; nonce: string }>).find((t) => t.lens === lens)!.nonce;
     expect((await checkCommand({ action: "review", cwd: repo, lenses: "security", reason: "r" }, deps)).output).toMatch(/consent/);
     expect((await checkCommand({ action: "review", cwd: repo, lenses: "security", consent: "yes" }, deps)).output).toMatch(/reason/);
     const started = await checkCommand({ action: "review", cwd: repo, lenses: "security,proof", reason: "new process call", consent: "yes" }, deps);
     expect(started.code).toBe(2);
     expect(JSON.parse(started.output)).toMatchObject({ outcome: "review_pending", lenses: ["security", "proof"] });
+    nonce = nonceOf(started.output, "security");
     expect((await checkCommand({ action: "capture", cwd: repo, lens: "security" }, deps)).code).toBe(2);
+    nonce = nonceOf(started.output, "proof");
     const ok = await checkCommand({ action: "capture", cwd: repo, lens: "proof" }, deps);
     expect(ok.code).toBe(0);
     expect(JSON.parse(ok.output)).toMatchObject({ outcome: "approved", lenses: ["security", "proof"] });

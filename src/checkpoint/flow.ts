@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { diffTrees, freezeCandidate, type FreezeOptions } from "./candidate.ts";
 import { changeBlock, correctionBlock } from "./instructions.ts";
@@ -70,6 +71,8 @@ type BriefFinding = Pick<IdFinding, "id" | "location" | "severity" | "claim" | "
 export interface ReviewTask {
   agent: string;
   lens?: LensName;
+  /** Random per task; the result must echo it, which binds the result to this task. */
+  nonce: string;
   reason?: string;
   changeFile: string;
   correctionFile?: string;
@@ -102,8 +105,11 @@ interface PendingReview {
   results: LensResult[];
   /** Lenses that already returned one incomplete result and used their one retry. */
   retried: LensName[];
+  /** The nonce of the task last printed for each lens. */
+  nonces: Partial<Record<LensName, string>>;
   /** The inferential severe findings sent to the challenger. */
   challenge?: IdFinding[];
+  challengeNonce?: string;
 }
 
 interface OpenCorrection {
@@ -116,6 +122,7 @@ interface OpenCorrection {
   budget: number;
   /** Identity of the corrected change the confirmer task was printed for. */
   confirming?: string;
+  confirmNonce?: string;
 }
 
 export type CaptureTarget = { lens: string } | { challenge: true } | { confirm: true };
@@ -151,15 +158,47 @@ const LENS_CAPTURE = "factory check capture --lens <lens> --file <result.json>";
 
 const brief = (fs: IdFinding[]): BriefFinding[] => fs.map(({ id, location, severity, claim, proof }) => ({ id, location, severity, claim, proof }));
 
+const NO_REVIEW = "There is no review waiting; run factory check review first.";
+const MOVED = "the change moved since review; run factory check review again";
+const NO_CONFIRM = "No confirmer result is expected; run factory check confirm first.";
+const MOVED_CONFIRM = "the change moved since confirm; run factory check confirm again";
+
 const lensTask = (store: CheckStore, p: PendingReview, lens: LensName): ReviewTask => ({
   lens,
   agent: `check-${lens}`,
-  changeFile: join(store.dir, CHANGE_FILE),
+  nonce: p.nonces[lens]!,
+  changeFile: join(store.worktreeDir, CHANGE_FILE),
   reason: p.reason,
   schema: jsonSchema(lensSchema),
 });
 
 const missingLenses = (p: PendingReview) => p.lenses.filter((l) => !p.results.some((r) => r.lens === l));
+
+/** A result must echo the nonce of the task it answers; a stale, copied or misrouted result is refused. */
+function checkNonce(expected: string | undefined, nonce: string, printedBy = "factory check review"): void {
+  if (!expected || nonce !== expected) {
+    throw new Error(`the result does not answer this task (nonce mismatch); rerun the subagent with the task printed by ${printedBy}`);
+  }
+}
+
+/** Whether a lens result can be taken now; run before the freeze and again under the lock. */
+function checkLens(p: PendingReview, lens: string): void {
+  if (!p.lenses.includes(lens as LensName)) throw new Error(`${lens} is not one of the lenses of this review (${p.lenses.join(", ")}).`);
+  if (p.stage !== "lenses") throw new Error("Every lens result is in; capture the challenger result with --challenge.");
+  if (p.results.some((r) => r.lens === lens)) throw new Error(`The ${lens} lens result is already captured.`);
+}
+
+function checkChallenge(p: PendingReview): void {
+  if (p.stage !== "challenge") throw new Error("No challenger result is expected; capture the lens results first.");
+}
+
+/** Re-reads the pending review under the lock: another capture may have changed it since the first read. */
+async function current(store: CheckStore, identity: string): Promise<PendingReview> {
+  const p = await store.pendingReview<PendingReview>();
+  if (!p) throw new Error(NO_REVIEW);
+  if (p.identity !== identity) throw new Error(MOVED);
+  return p;
+}
 
 async function clearPending(store: CheckStore): Promise<void> {
   await store.setPendingReview(undefined);
@@ -201,9 +240,12 @@ export async function review(
     stage: "lenses",
     results: [],
     retried: [],
+    nonces: Object.fromEntries(lenses.map((lens) => [lens, randomUUID()])),
   };
-  await store.writeTaskFile(CHANGE_FILE, changeBlock(candidate));
-  await store.setPendingReview(pending);
+  await store.withLock(async () => {
+    await store.writeTaskFile(CHANGE_FILE, changeBlock(candidate));
+    await store.setPendingReview(pending);
+  });
   return {
     outcome: "review_pending",
     identity: candidate.identity,
@@ -218,26 +260,43 @@ export async function review(
 /** Takes one subagent result back: validates it, stores it and continues the review or the confirmation. */
 export async function capture(cwd: string, target: CaptureTarget, text: string, store: CheckStore): Promise<ReviewOutcome | PendingOutcome> {
   if ("confirm" in target) return captureConfirm(cwd, text, store);
-  const p = await store.pendingReview<PendingReview>();
-  if (!p) throw new Error("There is no review waiting; run factory check review first.");
+  const first = await store.pendingReview<PendingReview>();
+  if (!first) throw new Error(NO_REVIEW);
+  // The freeze is slow, so it runs before the lock; the record is then read again under the lock and merged there.
   const unmoved = async () => {
-    if ((await freezeCandidate(cwd, p.options)).identity !== p.identity) throw new Error("the change moved since review; run factory check review again");
+    if ((await freezeCandidate(cwd, first.options)).identity !== first.identity) throw new Error(MOVED);
   };
 
   if ("challenge" in target) {
-    if (p.stage !== "challenge") throw new Error("No challenger result is expected; capture the lens results first.");
-    const verdicts = parseResult(challengeSchema, text, "challenger").results;
+    checkChallenge(first);
+    const { nonce, results: verdicts } = parseResult(challengeSchema, text, "challenger");
+    checkNonce(first.challengeNonce, nonce);
     await unmoved();
-    return decide(store, p, verdicts);
+    return store.withLock(async () => {
+      const p = await current(store, first.identity);
+      checkChallenge(p);
+      checkNonce(p.challengeNonce, nonce);
+      return decide(store, p, verdicts);
+    });
   }
 
   const lens = target.lens as LensName;
-  if (!p.lenses.includes(lens)) throw new Error(`${target.lens} is not one of the lenses of this review (${p.lenses.join(", ")}).`);
-  if (p.stage !== "lenses") throw new Error("Every lens result is in; capture the challenger result with --challenge.");
-  if (p.results.some((r) => r.lens === lens)) throw new Error(`The ${lens} lens result is already captured.`);
-  const result: LensResult = { lens, ...parseResult(lensSchema, text, `${lens} lens`) };
+  checkLens(first, target.lens);
+  const { nonce, ...parsed } = parseResult(lensSchema, text, `${lens} lens`);
+  const result: LensResult = { lens, ...parsed };
+  checkNonce(first.nonces?.[lens], nonce);
   await unmoved();
+  return store.withLock(async () => {
+    const p = await current(store, first.identity);
+    checkLens(p, lens);
+    checkNonce(p.nonces?.[lens], nonce);
+    return takeLens(store, p, result);
+  });
+}
 
+/** Stores one valid lens result (under the lock) and continues: a retry, the next missing lens or the decision. */
+async function takeLens(store: CheckStore, p: PendingReview, result: LensResult): Promise<ReviewOutcome | PendingOutcome> {
+  const { lens } = result;
   const pending = { outcome: "review_pending" as const, identity: p.identity, stage: "lenses" as const, lenses: p.lenses, capture: LENS_CAPTURE };
   if (!result.complete) {
     // A lens that inspects only part of the change gets one retry; a second partial result stops for a decision.
@@ -253,6 +312,8 @@ export async function capture(cwd: string, target: CaptureTarget, text: string, 
       };
     }
     p.retried.push(lens);
+    // The retry is a new task: it gets its own nonce, so the incomplete result cannot be captured again as its answer.
+    p.nonces[lens] = randomUUID();
     await store.setPendingReview(p);
     return {
       ...pending,
@@ -283,12 +344,13 @@ async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id
   const blockers = introduced.filter((f) => f.evidence === "deterministic");
   if (inferential.length) {
     if (!verdicts) {
-      await store.setPendingReview({ ...p, stage: "challenge", challenge: inferential });
+      const nonce = randomUUID();
+      await store.setPendingReview({ ...p, stage: "challenge", challenge: inferential, challengeNonce: nonce });
       return {
         ...base,
         outcome: "review_pending",
         stage: "challenge",
-        tasks: [{ agent: "check-challenger", changeFile: join(store.dir, CHANGE_FILE), findings: brief(inferential), schema: jsonSchema(challengeSchema) }],
+        tasks: [{ agent: "check-challenger", nonce, changeFile: join(store.worktreeDir, CHANGE_FILE), findings: brief(inferential), schema: jsonSchema(challengeSchema) }],
         capture: "factory check capture --challenge --file <result.json>",
         message: "Some severe findings rest on reasoning: run the challenger task on them, then capture its result.",
       };
@@ -300,9 +362,11 @@ async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id
       else blockers.push(f);
     }
   }
-  await clearPending(store);
 
+  // The outcome is stored first and the pending review cleared last, so a failure in between keeps every captured
+  // result: the last capture can simply be run again.
   if (unknown.length) {
+    await clearPending(store);
     return {
       ...base,
       outcome: "needs_decision",
@@ -315,6 +379,7 @@ async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id
     const budget = correctionBudget(p.changedLines);
     const open: OpenCorrection = { identity: p.identity, candidateTree: p.candidateTree, options: p.options, lenses: p.lenses, blockers, advisories, budget };
     await store.setOpenCorrection(open);
+    await clearPending(store);
     return {
       ...base,
       outcome: "correction_required",
@@ -325,6 +390,7 @@ async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id
     };
   }
   await store.seal({ identity: p.identity, lenses: p.lenses, outcome: "approved", advisories });
+  await clearPending(store);
   return { ...base, outcome: "approved", blockers: [], advisories, message: "Approved and sealed. Advisories are follow-ups, never a reason to review this change again." };
 }
 
@@ -338,50 +404,66 @@ export async function confirm(cwd: string, store: CheckStore): Promise<ReviewOut
   const base = { identity: corrected.identity, lenses: open.lenses, corrects: open.identity, advisories: open.advisories };
   const correction = await diffTrees(corrected.root, open.candidateTree, corrected.candidateTree);
   if (correction.lines === 0) return { ...base, outcome: "needs_decision", blockers: open.blockers, message: "Nothing changed since the review; the blockers are still open. Fix them, then run factory check confirm again." };
-  if (correction.lines > open.budget) {
-    await store.setOpenCorrection(undefined);
-    await store.removeFiles(CONFIRM_CHANGE_FILE, CORRECTION_FILE);
+  return store.withLock(async () => {
+    const now = await store.openCorrection<OpenCorrection>();
+    if (now?.identity !== open.identity) throw new Error("There is no correction waiting; run factory check review first.");
+    if (correction.lines > now.budget) {
+      await store.setOpenCorrection(undefined);
+      await store.removeFiles(CONFIRM_CHANGE_FILE, CORRECTION_FILE);
+      return {
+        ...base,
+        outcome: "needs_decision" as const,
+        blockers: now.blockers,
+        message: `The correction changed ${correction.lines} lines, over its budget of ${now.budget}; review it as a new change or decide.`,
+      };
+    }
+    const nonce = randomUUID();
+    const changeFile = await store.writeTaskFile(CONFIRM_CHANGE_FILE, changeBlock(corrected));
+    const correctionFile = await store.writeTaskFile(CORRECTION_FILE, correctionBlock(correction.patch));
+    await store.setOpenCorrection({ ...now, confirming: corrected.identity, confirmNonce: nonce });
     return {
-      ...base,
-      outcome: "needs_decision",
-      blockers: open.blockers,
-      message: `The correction changed ${correction.lines} lines, over its budget of ${open.budget}; review it as a new change or decide.`,
+      outcome: "review_pending" as const,
+      identity: corrected.identity,
+      stage: "confirm" as const,
+      lenses: now.lenses,
+      tasks: [{ agent: "check-confirmer", nonce, changeFile, correctionFile, blockers: brief(now.blockers), schema: jsonSchema(confirmSchema) }],
+      capture: "factory check capture --confirm --file <result.json>",
+      message: "Run the confirmer task on the correction and the corrected change, then capture its result.",
     };
-  }
-  await store.setOpenCorrection({ ...open, confirming: corrected.identity });
-  const changeFile = await store.writeTaskFile(CONFIRM_CHANGE_FILE, changeBlock(corrected));
-  const correctionFile = await store.writeTaskFile(CORRECTION_FILE, correctionBlock(correction.patch));
-  return {
-    outcome: "review_pending",
-    identity: corrected.identity,
-    stage: "confirm",
-    lenses: open.lenses,
-    tasks: [{ agent: "check-confirmer", changeFile, correctionFile, blockers: brief(open.blockers), schema: jsonSchema(confirmSchema) }],
-    capture: "factory check capture --confirm --file <result.json>",
-    message: "Run the confirmer task on the correction and the corrected change, then capture its result.",
-  };
+  });
 }
 
 async function captureConfirm(cwd: string, text: string, store: CheckStore): Promise<ReviewOutcome> {
-  const open = await store.openCorrection<OpenCorrection>();
-  if (!open?.confirming) throw new Error("No confirmer result is expected; run factory check confirm first.");
-  const verdict = parseResult(confirmSchema, text, "confirmer");
-  const corrected = await freezeCandidate(cwd, open.options);
-  if (corrected.identity !== open.confirming) throw new Error("the change moved since confirm; run factory check confirm again");
-  await store.setOpenCorrection(undefined);
-  await store.removeFiles(CONFIRM_CHANGE_FILE, CORRECTION_FILE);
-  const base = { identity: corrected.identity, lenses: open.lenses, corrects: open.identity, advisories: open.advisories };
-  const failing = open.blockers.filter((b) => verdict.results.find((r) => r.id === b.id)?.outcome !== "fixed");
-  if (failing.length || !verdict.onTopic) {
-    return {
-      ...base,
-      outcome: "needs_decision",
-      blockers: failing,
-      message: failing.length
-        ? `${failing.length} blocker(s) still fail after the one allowed correction.`
-        : `The correction touched unrelated paths: ${verdict.offTopicPaths.join(", ")}.`,
-    };
-  }
-  await store.seal({ identity: corrected.identity, lenses: open.lenses, outcome: "approved", advisories: open.advisories, corrects: open.identity });
-  return { ...base, outcome: "approved", blockers: [], message: "Every blocker is fixed; the corrected change is sealed." };
+  const first = await store.openCorrection<OpenCorrection>();
+  if (!first?.confirming) throw new Error(NO_CONFIRM);
+  const { nonce, ...verdict } = parseResult(confirmSchema, text, "confirmer");
+  checkNonce(first.confirmNonce, nonce, "factory check confirm");
+  const corrected = await freezeCandidate(cwd, first.options);
+  if (corrected.identity !== first.confirming) throw new Error(MOVED_CONFIRM);
+  return store.withLock(async () => {
+    // Read again under the lock: a second capture of the same result must not use the one correction twice.
+    const open = await store.openCorrection<OpenCorrection>();
+    if (!open?.confirming) throw new Error(NO_CONFIRM);
+    checkNonce(open.confirmNonce, nonce, "factory check confirm");
+    if (corrected.identity !== open.confirming) throw new Error(MOVED_CONFIRM);
+    const base = { identity: corrected.identity, lenses: open.lenses, corrects: open.identity, advisories: open.advisories };
+    const failing = open.blockers.filter((b) => verdict.results.find((r) => r.id === b.id)?.outcome !== "fixed");
+    if (!failing.length && verdict.onTopic) {
+      // Seal first and use up the correction last, so a failed seal keeps the correction for another capture.
+      await store.seal({ identity: corrected.identity, lenses: open.lenses, outcome: "approved", advisories: open.advisories, corrects: open.identity });
+    }
+    await store.setOpenCorrection(undefined);
+    await store.removeFiles(CONFIRM_CHANGE_FILE, CORRECTION_FILE);
+    if (failing.length || !verdict.onTopic) {
+      return {
+        ...base,
+        outcome: "needs_decision" as const,
+        blockers: failing,
+        message: failing.length
+          ? `${failing.length} blocker(s) still fail after the one allowed correction.`
+          : `The correction touched unrelated paths: ${verdict.offTopicPaths.join(", ")}.`,
+      };
+    }
+    return { ...base, outcome: "approved" as const, blockers: [], message: "Every blocker is fixed; the corrected change is sealed." };
+  });
 }

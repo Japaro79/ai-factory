@@ -41,8 +41,9 @@ export const CHECK_USAGE = `factory check <action>
       Freeze the change and print one subagent task per lens (exit 2, outcome review_pending); only after the
       user said yes to this change. No AI is called: run each task's check-<lens> subagent, then capture it.
   capture --lens <lens> | --challenge | --confirm [--file <result.json>]
-      Hand one subagent result back (JSON from the file, or stdin). It is validated against the task's schema; a
-      malformed result exits 1 and stores nothing. Prints the next task or the outcome.
+      Hand one subagent result back (JSON from the file, or stdin). It is validated against the task's schema and
+      must echo the task's nonce; a malformed result or another task's result exits 1 and stores nothing. Prints the
+      next task or the outcome. A relative --file is read from --cwd.
   confirm
       Check the one allowed correction's size, then print the check-confirmer task for its blockers.
   mode on|off|status [--scope global|repo]
