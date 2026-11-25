@@ -152,8 +152,9 @@ hook you already had. No AI is called by the factory: before committing, your ag
 the printed task to its installed `check-gate` subagent and hands the JSON result back with
 `factory gate capture --file <result.json>`, which seals a passed staged change. The hook (`factory gate run`) only
 checks that exactly the staged change has that seal. Without one (for example, a commit you make from the terminal) it
-warns and lets the commit through; set `"strict": true` in `.factory/gate.json` to block it instead.
-`git commit --no-verify` skips the hook once.
+blocks the commit and says how to get a seal; set `"strict": false` in `.factory/gate.json` to only warn instead.
+`git commit --no-verify` skips the hook once. The issue factory's own commits skip it: the factory reviews its work
+itself and ends in a pull request that the repository's checks review again.
 
 Checkpoint is also a command you can run yourself: `factory check assess` rates the current change, and
 `factory check review --lenses security,proof --reason "..." --consent yes` freezes it and prints one task per lens.

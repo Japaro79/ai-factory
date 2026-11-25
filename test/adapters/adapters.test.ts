@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -77,6 +77,20 @@ describe("GitWorktrees (real git, local remote)", () => {
 
   afterAll(async () => {
     await rm(root, { recursive: true, force: true });
+  });
+
+  it("commits even when the repository's pre-commit hook blocks (the factory reviews its own work)", async () => {
+    const hooks = join(repo, ".git", "hooks");
+    await mkdir(hooks, { recursive: true });
+    await writeFile(join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n");
+    try {
+      const wt = new GitWorktrees(repo, "main");
+      const ws = await wt.create({ ...task, id: "issue-hook", externalId: 2 });
+      await writeFile(join(ws.path, "hooked.txt"), "x\n");
+      expect(await wt.commitAll(ws, "hooked change")).toBe(true);
+    } finally {
+      await rm(join(hooks, "pre-commit"), { force: true });
+    }
   });
 
   it("creates a sibling worktree, commits, diffs against base and pushes the branch", async () => {

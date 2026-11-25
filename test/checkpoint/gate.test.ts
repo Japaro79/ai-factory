@@ -11,7 +11,9 @@ import { CheckStore } from "../../src/checkpoint/store.ts";
 let repo: string;
 let home: string;
 const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
-const UNSEALED = 'gate: the staged change has no review seal; ask your agent to run "factory gate review", or commit with --no-verify';
+const BLOCKED =
+  'gate: commit blocked: the staged change has no review seal. Ask your agent to run "factory gate review", run the check-gate task and "factory gate capture", then commit again. To let unsealed commits through in this repository, set "strict": false in .factory/gate.json.';
+const WARNED = 'gate: warning: the staged change has no review seal ("strict": false in .factory/gate.json). Ask your agent to run "factory gate review" before committing.';
 
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), "factory-gate-"));
@@ -65,8 +67,8 @@ describe("factory gate init", () => {
     expect(hook).toBe('#!/bin/sh\necho mine\n# ai-factory:gate\nnode "/opt/f/tsx.mjs" "/opt/f/cli.ts" gate run || exit 1\n');
     await initGate(repo, ["node", "/opt/f/tsx.mjs", "/opt/f/cli.ts"]);
     expect((await readFile(join(repo, ".git", "hooks", "pre-commit"), "utf8")).match(/gate run/g)).toHaveLength(1);
-    // The default no longer blocks a commit without a seal: it warns and lets it through.
-    expect(JSON.parse(await readFile(join(repo, ".factory", "gate.json"), "utf8"))).toMatchObject({ rules: "AGENTS.md", strict: false });
+    // Blocking is the default: a commit without a seal does not go through.
+    expect(JSON.parse(await readFile(join(repo, ".factory", "gate.json"), "utf8"))).toMatchObject({ rules: "AGENTS.md", strict: true });
   });
 });
 
@@ -193,20 +195,21 @@ describe("factory gate capture", () => {
 });
 
 describe("factory gate run (the pre-commit hook)", () => {
-  it("warns and lets an unsealed staged change through by default", async () => {
+  it("blocks an unsealed staged change by default, saying how to get a seal or relax it", async () => {
     await writeFile(join(repo, "a.ts"), "export const a = 2;\n");
     git("add", "a.ts");
-    expect(await runGate(repo)).toEqual({ code: 0, message: UNSEALED });
+    expect(await runGate(repo)).toEqual({ code: 1, message: BLOCKED });
     const r = await gate({ action: "run" });
-    expect(r).toMatchObject({ code: 0, output: UNSEALED, stderr: true });
+    expect(r).toMatchObject({ code: 1, output: BLOCKED, stderr: true });
   });
 
-  it("blocks an unsealed staged change when strict is true", async () => {
+  it("warns and lets an unsealed staged change through when strict is false", async () => {
     await mkdir(join(repo, ".factory"), { recursive: true });
-    await writeFile(join(repo, ".factory", "gate.json"), JSON.stringify({ strict: true }));
+    await writeFile(join(repo, ".factory", "gate.json"), JSON.stringify({ strict: false }));
     await writeFile(join(repo, "a.ts"), "export const a = 2;\n");
     git("add", "a.ts");
-    expect(await runGate(repo)).toEqual({ code: 1, message: UNSEALED });
+    expect(await runGate(repo)).toEqual({ code: 0, message: WARNED });
+    expect(await gate({ action: "run" })).toMatchObject({ code: 0, output: WARNED, stderr: true });
   });
 
   it("checks the seal of exactly the staged tree", async () => {
@@ -214,7 +217,7 @@ describe("factory gate run (the pre-commit hook)", () => {
     await gate({ action: "capture" }, passed(r.body.task.nonce));
     await writeFile(join(repo, "a.ts"), "export const a = 4;\n");
     git("add", "a.ts");
-    expect(await runGate(repo)).toEqual({ code: 0, message: UNSEALED });
+    expect(await runGate(repo)).toEqual({ code: 1, message: BLOCKED });
   });
 
   it("lets the commit through when nothing is left after the patterns", async () => {

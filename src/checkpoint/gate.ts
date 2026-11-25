@@ -57,11 +57,14 @@ interface PendingGate {
 
 export const GATE_CONFIG = ".factory/gate.json";
 export const DEFAULT_GLOBAL_RULES = join(FACTORY_HOME, "gate-rules.md");
-const DEFAULTS: GateConfig = { files: ["*"], exclude: [], rules: "AGENTS.md", strict: false };
+const DEFAULTS: GateConfig = { files: ["*"], exclude: [], rules: "AGENTS.md", strict: true };
 const HOOK_MARK = "# ai-factory:gate";
 const GATE_CHANGE_FILE = "gate-change.txt";
 const GATE_CAPTURE = "factory gate capture --file <result.json>";
-export const UNSEALED_MESSAGE = 'gate: the staged change has no review seal; ask your agent to run "factory gate review", or commit with --no-verify';
+export const UNSEALED_BLOCKED =
+  'gate: commit blocked: the staged change has no review seal. Ask your agent to run "factory gate review", run the check-gate task and "factory gate capture", then commit again. To let unsealed commits through in this repository, set "strict": false in .factory/gate.json.';
+export const UNSEALED_WARNING =
+  'gate: warning: the staged change has no review seal ("strict": false in .factory/gate.json). Ask your agent to run "factory gate review" before committing.';
 const NO_GATE_REVIEW = "There is no gate review waiting; run factory gate review first.";
 const MOVED = "the staged change moved since gate review; run factory gate review again";
 const NOTHING = "Gate: no staged files to review.";
@@ -179,11 +182,12 @@ export async function captureGate(cwd: string, text: string): Promise<GateOutcom
 
 /**
  * `factory gate run`, the pre-commit hook: calls no AI and only checks that exactly the staged change is sealed.
- * Without a seal it warns and lets the commit through (exit 0), or blocks it (exit 1) when the config is strict.
+ * Without a seal it blocks the commit (exit 1), unless the repository relaxed it with `"strict": false`, which warns and
+ * lets it through (exit 0).
  */
 export async function runGate(cwd: string): Promise<{ code: number; message: string }> {
   const { candidate, config, reviewed } = await stagedChange(cwd);
   if (!reviewed.changes.length) return { code: 0, message: NOTHING };
   if (await new CheckStore(candidate.root).isSealed(sealKey(candidate.identity))) return { code: 0, message: "" };
-  return { code: config.strict === true ? 1 : 0, message: UNSEALED_MESSAGE };
+  return config.strict === false ? { code: 0, message: UNSEALED_WARNING } : { code: 1, message: UNSEALED_BLOCKED };
 }

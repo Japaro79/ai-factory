@@ -106,7 +106,7 @@ Checkpoint reviews and the commit gate call no AI from the factory, so a `checkp
 `agents`, like any other subagent), and `factory check capture` validates each JSON result before the outcome is
 decided. The commit gate works the same way: `factory gate review` prints a `check-gate` task for the staged change,
 and `factory gate capture` validates its result and seals a passed change. The pre-commit hook only checks that seal;
-without one it warns and lets the commit through, unless `.factory/gate.json` sets `"strict": true`. The subagents
+without one it blocks the commit, unless `.factory/gate.json` sets `"strict": false`, which only warns. The subagents
 read only the change file the task names, never the live worktree.
 
 Each block sits between `<!-- ai-factory:<name> -->` markers in the agent's instruction file (`~/.claude/CLAUDE.md`,

@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { assess, capture, confirm, review, type CaptureTarget } from "./flow.ts";
-import { captureGate, reviewGate, runGate, UNSEALED_MESSAGE } from "./gate.ts";
+import { captureGate, reviewGate, runGate, UNSEALED_BLOCKED, UNSEALED_WARNING } from "./gate.ts";
 import { handleHook } from "./hook.ts";
 import { CheckStore, DEFAULT_GLOBAL_SETTINGS } from "./store.ts";
 
@@ -149,7 +149,7 @@ export const GATE_USAGE = `factory gate <action>
       violations (exit 1). A relative --file is read from --cwd.
   run
       The pre-commit hook. Calls no AI: it only checks that exactly the staged change is sealed. Without a seal it
-      warns and exits 0, or exits 1 when .factory/gate.json has "strict": true.`;
+      blocks the commit (exit 1), or only warns (exit 0) when .factory/gate.json has "strict": false.`;
 
 /** Runs one `factory gate` action (init stays in the main CLI) and returns what to print, where, and the exit code. */
 export async function gateCommand(args: GateArgs, deps: GateDeps = {}): Promise<{ code: number; output: string; stderr: boolean }> {
@@ -167,8 +167,8 @@ export async function gateCommand(args: GateArgs, deps: GateDeps = {}): Promise<
       }
       case "run": {
         const r = await runGate(args.cwd);
-        // The missing-seal warning goes to stderr even when the commit is let through.
-        return { code: r.code, output: r.message, stderr: r.message === UNSEALED_MESSAGE };
+        // A missing seal is reported on stderr, whether the commit is blocked or only warned about.
+        return { code: r.code, output: r.message, stderr: r.message === UNSEALED_BLOCKED || r.message === UNSEALED_WARNING };
       }
       default:
         // Like before review and capture existed, a missing or unknown action is an error.

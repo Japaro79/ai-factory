@@ -85,8 +85,9 @@ every commit you make:
    exits 1 and lists the violations: fix them, stage again and repeat from step 1. A malformed result, another task's
    nonce or a staged change that moved since the review is refused and nothing is sealed.
 
-The hook calls no AI: it only checks the seal of exactly the staged change. Without one it warns and lets the commit
-through, unless `.factory/gate.json` sets `"strict": true`, which blocks it. The gate needs no consent question.
+The hook calls no AI: it only checks the seal of exactly the staged change. Without one it blocks the commit, unless
+`.factory/gate.json` sets `"strict": false`, which only warns. So review and capture before every commit you make. The
+gate needs no consent question.
 
 ## Another repository
 
