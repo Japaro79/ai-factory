@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { assess, capture, confirm, review, type Finding, type LensName, type PendingOutcome, type ReviewOutcome } from "../../src/checkpoint/flow.ts";
-import { CheckStore } from "../../src/checkpoint/store.ts";
+import { CheckStore, type Seal } from "../../src/checkpoint/store.ts";
 
 let repo: string;
 let home: string;
@@ -47,11 +47,14 @@ async function reviewWith(byLens: Partial<Record<LensName, Finding[]>>, lenses: 
   let r: ReviewOutcome | PendingOutcome = await review(repo, { lenses, reason: "r" }, store);
   if (r.outcome !== "review_pending") return { result: r, tasks };
   tasks.push(...r.tasks.map((t) => t.agent));
-  for (const lens of lenses) r = await capture(repo, { lens }, JSON.stringify({ complete: true, inspected: "all", findings: byLens[lens] ?? [] }), store);
+  const nonces = new Map(r.tasks.map((t) => [t.lens, t.nonce]));
+  for (const lens of lenses) {
+    r = await capture(repo, { lens }, JSON.stringify({ complete: true, inspected: "all", findings: byLens[lens] ?? [], nonce: nonces.get(lens) }), store);
+  }
   if (r.outcome === "review_pending" && r.stage === "challenge") {
     tasks.push(...r.tasks.map((t) => t.agent));
     const results = r.tasks[0]!.findings!.map((f) => ({ id: f.id, outcome: verdict, proof: ["checked"] }));
-    r = await capture(repo, { challenge: true }, JSON.stringify({ results }), store);
+    r = await capture(repo, { challenge: true }, JSON.stringify({ results, nonce: r.tasks[0]!.nonce }), store);
   }
   return { result: r as ReviewOutcome, tasks };
 }
@@ -61,7 +64,8 @@ async function confirmWith(outcome = "fixed", onTopic = true) {
   const task = await confirm(repo, store);
   if (task.outcome !== "review_pending") return { result: task, asked: false };
   const results = task.tasks[0]!.blockers!.map((b) => ({ id: b.id, outcome, proof: ["checked"] }));
-  const result = (await capture(repo, { confirm: true }, JSON.stringify({ results, onTopic, offTopicPaths: onTopic ? [] : ["other.ts"] }), store)) as ReviewOutcome;
+  const nonce = task.tasks[0]!.nonce;
+  const result = (await capture(repo, { confirm: true }, JSON.stringify({ results, onTopic, offTopicPaths: onTopic ? [] : ["other.ts"], nonce }), store)) as ReviewOutcome;
   return { result, asked: true };
 }
 
@@ -173,6 +177,31 @@ describe("confirm", () => {
 });
 
 describe("failures that must not lose work", () => {
+  /** A store whose first seal fails, like a full disk or a killed process right after the decision. */
+  class FlakySealStore extends CheckStore {
+    failures = 1;
+    override async seal(seal: Seal): Promise<void> {
+      if (this.failures-- > 0) throw new Error("disk full");
+      return super.seal(seal);
+    }
+  }
+
+  it("a failure while storing the outcome keeps the captured results for another capture", async () => {
+    await highRiskChange();
+    const flaky = new FlakySealStore(repo, join(home, "check.json"));
+    const r = (await review(repo, { lenses: ["security", "proof"], reason: "r" }, flaky)) as PendingOutcome;
+    const result = (lens: LensName) => JSON.stringify({ complete: true, inspected: "all", findings: [], nonce: r.tasks.find((t) => t.lens === lens)!.nonce });
+    await capture(repo, { lens: "security" }, result("security"), flaky);
+    await expect(capture(repo, { lens: "proof" }, result("proof"), flaky)).rejects.toThrow("disk full");
+    expect(await flaky.pendingReview()).toMatchObject({ identity: r.identity, stage: "lenses", results: [expect.objectContaining({ lens: "security" })] });
+    expect(await flaky.isSealed(r.identity)).toBe(false);
+
+    const done = await capture(repo, { lens: "proof" }, result("proof"), flaky);
+    expect(done).toMatchObject({ outcome: "approved", identity: r.identity });
+    expect(await flaky.isSealed(r.identity)).toBe(true);
+    expect(await flaky.pendingReview()).toBeUndefined();
+  });
+
   it("an invalid confirmer result keeps the correction open for another try", async () => {
     await highRiskChange();
     await reviewWith({ security: [finding()] });

@@ -2,8 +2,11 @@ import { z } from "zod";
 
 /**
  * The shapes Checkpoint's subagents must return. They are the single validator for every captured result, and their
- * JSON Schema is printed in each task so the host agent can tell its subagent exactly what to answer.
+ * JSON Schema is printed in each task so the host agent can tell its subagent exactly what to answer. Every result
+ * echoes the `nonce` of the task it answers, which binds it to that task.
  */
+
+const nonce = z.string().min(1);
 
 export const findingSchema = z.object({
   location: z.string().min(1),
@@ -14,13 +17,15 @@ export const findingSchema = z.object({
   proof: z.array(z.string()),
 });
 
-export const lensSchema = z.object({ complete: z.boolean(), inspected: z.string(), findings: z.array(findingSchema) });
+export const lensSchema = z.object({ nonce, complete: z.boolean(), inspected: z.string(), findings: z.array(findingSchema) });
 
 export const challengeSchema = z.object({
+  nonce,
   results: z.array(z.object({ id: z.string(), outcome: z.enum(["corroborated", "refuted", "inconclusive"]), proof: z.array(z.string()) })),
 });
 
 export const confirmSchema = z.object({
+  nonce,
   results: z.array(z.object({ id: z.string(), outcome: z.enum(["fixed", "still_failing", "unverifiable"]), proof: z.array(z.string()) })),
   onTopic: z.boolean(),
   offTopicPaths: z.array(z.string()),

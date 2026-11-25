@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkCommand, type CheckArgs } from "../../src/checkpoint/cli.ts";
 import { CheckStore } from "../../src/checkpoint/store.ts";
@@ -32,16 +32,29 @@ afterEach(async () => {
   await rm(home, { recursive: true, force: true });
 });
 
-/** Runs one `factory check` action; `input` is what the host agent pipes to capture on stdin. */
-async function run(args: Omit<CheckArgs, "cwd">, input?: unknown) {
-  const stdin = async () => (typeof input === "string" ? input : JSON.stringify(input));
-  const r = await checkCommand({ ...args, cwd: repo }, { settings, stdin });
+/** The nonce of the last task printed for each target (a lens, the challenger or the confirmer), per worktree. */
+let nonces: Map<string, string>;
+beforeEach(() => {
+  nonces = new Map();
+});
+const targetOf = (args: Partial<CheckArgs> | { lens?: string; agent?: string }) =>
+  "lens" in args && args.lens ? args.lens : ("challenge" in args && args.challenge) || ("agent" in args && args.agent === "check-challenger") ? "challenge" : "confirm";
+
+/**
+ * Runs one `factory check` action; `input` is what the host agent pipes to capture on stdin. Like the host agent, a
+ * result object without a `nonce` gets the nonce of the last task printed for its target; a string is sent as it is.
+ */
+async function run(args: Omit<CheckArgs, "cwd">, input?: unknown, cwd = repo) {
+  const payload = input && typeof input === "object" && !("nonce" in input) ? { ...input, nonce: nonces.get(`${cwd}:${targetOf(args)}`) } : input;
+  const stdin = async () => (typeof payload === "string" ? payload : JSON.stringify(payload));
+  const r = await checkCommand({ ...args, cwd }, { settings, stdin });
   let body: any;
   try {
     body = JSON.parse(r.output);
   } catch {
     body = undefined;
   }
+  for (const task of body?.tasks ?? []) nonces.set(`${cwd}:${targetOf(task)}`, task.nonce);
   return { code: r.code, output: r.output, body };
 }
 
@@ -57,6 +70,7 @@ const finding = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 const correct = () => writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
+const NONCE_MISMATCH = "the result does not answer this task (nonce mismatch); rerun the subagent with the task printed by factory check review";
 
 describe("factory check review", () => {
   it("prints one subagent task per lens with the change file and the result schema, and calls no AI", async () => {
@@ -99,7 +113,7 @@ describe("factory check capture", () => {
     expect(first.body).toMatchObject({ outcome: "review_pending", missing: ["proof"] });
 
     const file = join(home, "proof.json");
-    await writeFile(file, JSON.stringify(lensResult()));
+    await writeFile(file, JSON.stringify({ ...lensResult(), nonce: nonces.get(`${repo}:proof`) }));
     const done = await run({ action: "capture", lens: "proof", file });
     expect(done.code).toBe(0);
     expect(done.body).toMatchObject({ outcome: "approved", identity: pending.identity, lenses: ["security", "proof"], blockers: [] });
@@ -225,5 +239,156 @@ describe("factory check confirm", () => {
     await review("security");
     expect((await run({ action: "capture" }, lensResult())).code).toBe(1);
     expect((await run({ action: "capture", lens: "security", challenge: true }, lensResult())).code).toBe(1);
+  });
+
+  it("removes the confirmer's task files once its result is captured", async () => {
+    await blocked();
+    await correct();
+    const t = (await run({ action: "confirm" })).body.tasks[0];
+    expect(existsSync(t.changeFile) && existsSync(t.correctionFile)).toBe(true);
+    await run({ action: "capture", confirm: true }, { results: [{ id: "security-1", outcome: "fixed", proof: ["pwd"] }], onTopic: true, offTopicPaths: [] });
+    expect(existsSync(t.changeFile)).toBe(false);
+    expect(existsSync(t.correctionFile)).toBe(false);
+  });
+
+  it("removes the confirmer's task files when a correction goes over its budget", async () => {
+    await blocked();
+    await correct();
+    const t = (await run({ action: "confirm" })).body.tasks[0];
+    await writeFile(join(repo, "run.ts"), Array.from({ length: 30 }, (_, i) => `export const v${i} = ${i};`).join("\n") + "\n");
+    const over = await run({ action: "confirm" });
+    expect(over.body).toMatchObject({ outcome: "needs_decision" });
+    expect(over.body.message).toMatch(/over its budget/);
+    expect(existsSync(t.changeFile)).toBe(false);
+    expect(existsSync(t.correctionFile)).toBe(false);
+  });
+
+  it("refuses a confirmer result whose nonce is not the confirmer task's, keeping the correction open", async () => {
+    await blocked();
+    await correct();
+    await run({ action: "confirm" });
+    const r = await run({ action: "capture", confirm: true }, { results: [{ id: "security-1", outcome: "fixed", proof: [] }], onTopic: true, offTopicPaths: [], nonce: "stale" });
+    expect(r.code).toBe(1);
+    expect(r.output).toMatch(/nonce mismatch/);
+    expect(await store.openCorrection()).toBeDefined();
+    expect(await store.seals()).toEqual([]);
+  });
+});
+
+describe("capture guards", () => {
+  it("refuses a challenger result before the challenge stage", async () => {
+    const { body } = await review("security");
+    const r = await run({ action: "capture", challenge: true }, { results: [] });
+    expect(r).toMatchObject({ code: 1, output: "No challenger result is expected; capture the lens results first." });
+    expect(await store.isSealed(body.identity)).toBe(false);
+  });
+
+  it("refuses a challenger result when the change moved since review, keeping the challenge open", async () => {
+    await review("security");
+    await run({ action: "capture", lens: "security" }, lensResult([finding({ evidence: "inferential" })]));
+    await writeFile(join(repo, "run.ts"), "export const other = 2;\n");
+    const r = await run({ action: "capture", challenge: true }, { results: [{ id: "security-1", outcome: "refuted", proof: [] }] });
+    expect(r).toMatchObject({ code: 1, output: "the change moved since review; run factory check review again" });
+    expect(await store.pendingReview()).toMatchObject({ stage: "challenge" });
+  });
+
+  it("refuses a second capture of a lens whose complete result is already in", async () => {
+    await review();
+    expect((await run({ action: "capture", lens: "security" }, lensResult())).code).toBe(2);
+    const again = await run({ action: "capture", lens: "security" }, lensResult());
+    expect(again).toMatchObject({ code: 1, output: "The security lens result is already captured." });
+    expect(await store.pendingReview()).toMatchObject({ results: [expect.objectContaining({ lens: "security" })] });
+  });
+
+  it("removes the change file when a second incomplete result stops for a decision", async () => {
+    const { body } = await review("security");
+    await run({ action: "capture", lens: "security" }, lensResult([], false));
+    const twice = await run({ action: "capture", lens: "security" }, lensResult([], false));
+    expect(twice.body).toMatchObject({ outcome: "needs_decision" });
+    expect(existsSync(body.tasks[0].changeFile)).toBe(false);
+    expect(await store.pendingReview()).toBeUndefined();
+  });
+
+  it("resolves a relative --file against --cwd", async () => {
+    await review("proof");
+    await writeFile(join(home, "proof.json"), JSON.stringify({ ...lensResult(), nonce: nonces.get(`${repo}:proof`) }));
+    const r = await run({ action: "capture", lens: "proof", file: relative(repo, join(home, "proof.json")) });
+    expect(r.code).toBe(0);
+    expect(r.body).toMatchObject({ outcome: "approved" });
+  });
+
+  it("keeps a finding the challenger's result leaves out as a blocker", async () => {
+    await review("security");
+    await run({ action: "capture", lens: "security" }, lensResult([finding({ evidence: "inferential" }), finding({ location: "run.ts:1", evidence: "inferential" })]));
+    const r = await run({ action: "capture", challenge: true }, { results: [{ id: "security-1", outcome: "refuted", proof: ["guarded"] }] });
+    expect(r.code).toBe(2);
+    expect(r.body).toMatchObject({ outcome: "correction_required", blockers: [expect.objectContaining({ id: "security-2" })] });
+    expect(r.body.advisories).toEqual([expect.objectContaining({ id: "security-1", refuted: true })]);
+  });
+});
+
+describe("task nonces", () => {
+  it("prints a different nonce in every task", async () => {
+    const { body } = await review();
+    const printed = body.tasks.map((t: any) => t.nonce);
+    expect(printed).toEqual([expect.any(String), expect.any(String)]);
+    expect(new Set(printed).size).toBe(2);
+    expect(body.tasks[0].schema).toMatchObject({ required: expect.arrayContaining(["nonce"]) });
+  });
+
+  it("refuses a result without a nonce through the schema, storing nothing", async () => {
+    const { body } = await review("security");
+    const r = await run({ action: "capture", lens: "security" }, JSON.stringify(lensResult()));
+    expect(r.code).toBe(1);
+    expect(r.output).toMatch(/does not match its schema/);
+    expect(r.output).toMatch(/nonce/);
+    expect(await store.pendingReview()).toMatchObject({ results: [] });
+    expect(await store.isSealed(body.identity)).toBe(false);
+  });
+
+  it("refuses a result with another task's nonce, and accepts the task's own", async () => {
+    const { body } = await review();
+    const [security, proof] = body.tasks.map((t: any) => t.nonce);
+    const wrong = await run({ action: "capture", lens: "security" }, { ...lensResult(), nonce: proof });
+    expect(wrong).toMatchObject({ code: 1, output: NONCE_MISMATCH });
+    expect(await store.pendingReview()).toMatchObject({ results: [] });
+    const right = await run({ action: "capture", lens: "security" }, { ...lensResult(), nonce: security });
+    expect(right.code).toBe(2);
+    expect(right.body).toMatchObject({ outcome: "review_pending", missing: ["proof"] });
+  });
+
+  it("refuses a challenger result with a lens task's nonce", async () => {
+    const { body } = await review("security");
+    await run({ action: "capture", lens: "security" }, lensResult([finding({ evidence: "inferential" })]));
+    const r = await run({ action: "capture", challenge: true }, { results: [], nonce: body.tasks[0].nonce });
+    expect(r).toMatchObject({ code: 1, output: NONCE_MISMATCH });
+    expect(await store.pendingReview()).toMatchObject({ stage: "challenge" });
+  });
+});
+
+describe("parallel captures and worktrees", () => {
+  it("counts two lens captures that run at the same time and reaches the outcome", async () => {
+    const { body } = await review();
+    const both = await Promise.all([run({ action: "capture", lens: "security" }, lensResult()), run({ action: "capture", lens: "proof" }, lensResult())]);
+    expect(both.map((r) => r.body.outcome).sort()).toEqual(["approved", "review_pending"]);
+    expect(await store.isSealed(body.identity)).toBe(true);
+    expect(await store.pendingReview()).toBeUndefined();
+  });
+
+  it("keeps reviews waiting in two worktrees apart, and both complete", async () => {
+    const wt = join(home, "wt");
+    git("worktree", "add", "-q", "--detach", wt);
+    await writeFile(join(wt, "net.ts"), 'export const get = () => fetch("http://example.com");\n');
+    const first = await review("security");
+    const second = await run({ action: "review", lenses: "security", reason: "new network call", consent: "yes" }, undefined, wt);
+    expect(second.code).toBe(2);
+    expect(second.body.identity).not.toBe(first.body.identity);
+    expect(second.body.tasks[0].changeFile).not.toBe(first.body.tasks[0].changeFile);
+
+    const a = await run({ action: "capture", lens: "security" }, lensResult());
+    expect(a.body).toMatchObject({ outcome: "approved", identity: first.body.identity });
+    const b = await run({ action: "capture", lens: "security" }, lensResult(), wt);
+    expect(b.body).toMatchObject({ outcome: "approved", identity: second.body.identity });
+    expect((await store.seals()).map((s) => s.identity).sort()).toEqual([first.body.identity, second.body.identity].sort());
   });
 });
