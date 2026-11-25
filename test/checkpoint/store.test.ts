@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -31,7 +31,9 @@ describe("CheckStore review state", () => {
     git("worktree", "add", "-q", "--detach", wt);
     const main = new CheckStore(repo, join(home, "check.json"));
     const other = new CheckStore(wt, join(home, "check.json"));
-    expect(other.dir).toBe(main.dir);
+    // Same folder, compared by real path: Windows may name the temp folder by its 8.3 short form in one of them.
+    const real = (dir: string) => join(realpathSync.native(join(dir, "..")), "factory-check");
+    expect(real(other.dir)).toBe(real(main.dir));
     expect(other.worktreeDir).not.toBe(main.worktreeDir);
     await mkdir(join(repo, "sub"));
     expect(new CheckStore(join(repo, "sub"), join(home, "check.json")).worktreeDir).toBe(main.worktreeDir);
