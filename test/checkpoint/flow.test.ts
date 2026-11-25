@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assess, confirm, review, type CheckAgents, type Finding, type LensName } from "../../src/checkpoint/flow.ts";
+import { assess, capture, confirm, review, type Finding, type LensName, type PendingOutcome, type ReviewOutcome } from "../../src/checkpoint/flow.ts";
 import { CheckStore } from "../../src/checkpoint/store.ts";
 
 let repo: string;
@@ -38,30 +38,37 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
   ...over,
 });
 
-/** Fake agents: each lens returns what the test says; calls are recorded. */
-function agents(byLens: Partial<Record<LensName, Finding[]>>, extra: Partial<CheckAgents> = {}) {
-  const calls: string[] = [];
-  const a: CheckAgents = {
-    async review(lens) {
-      calls.push(`review:${lens}`);
-      return { lens, complete: true, findings: byLens[lens] ?? [], inspected: "all paths" };
-    },
-    async challenge(findings) {
-      calls.push(`challenge:${findings.length}`);
-      return findings.map((f) => ({ id: f.id, outcome: "corroborated" as const, proof: ["holds"] }));
-    },
-    async confirm(blockers) {
-      calls.push(`confirm:${blockers.length}`);
-      return { results: blockers.map((b) => ({ id: b.id, outcome: "fixed" as const, proof: ["removed"] })), onTopic: true, offTopicPaths: [] };
-    },
-    ...extra,
-  };
-  return { agents: a, calls };
+/**
+ * Plays the host agent: starts the review, captures what each lens subagent returns and, when asked, the challenger's
+ * verdict on every finding. Records which subagent tasks were printed.
+ */
+async function reviewWith(byLens: Partial<Record<LensName, Finding[]>>, lenses: LensName[] = ["security"], verdict = "corroborated") {
+  const tasks: string[] = [];
+  let r: ReviewOutcome | PendingOutcome = await review(repo, { lenses, reason: "r" }, store);
+  if (r.outcome !== "review_pending") return { result: r, tasks };
+  tasks.push(...r.tasks.map((t) => t.agent));
+  for (const lens of lenses) r = await capture(repo, { lens }, JSON.stringify({ complete: true, inspected: "all", findings: byLens[lens] ?? [] }), store);
+  if (r.outcome === "review_pending" && r.stage === "challenge") {
+    tasks.push(...r.tasks.map((t) => t.agent));
+    const results = r.tasks[0]!.findings!.map((f) => ({ id: f.id, outcome: verdict, proof: ["checked"] }));
+    r = await capture(repo, { challenge: true }, JSON.stringify({ results }), store);
+  }
+  return { result: r as ReviewOutcome, tasks };
+}
+
+/** Plays the host agent for confirm: runs the confirmer task with the given verdict for every blocker. */
+async function confirmWith(outcome = "fixed", onTopic = true) {
+  const task = await confirm(repo, store);
+  if (task.outcome !== "review_pending") return { result: task, asked: false };
+  const results = task.tasks[0]!.blockers!.map((b) => ({ id: b.id, outcome, proof: ["checked"] }));
+  const result = (await capture(repo, { confirm: true }, JSON.stringify({ results, onTopic, offTopicPaths: onTopic ? [] : ["other.ts"] }), store)) as ReviewOutcome;
+  return { result, asked: true };
 }
 
 async function highRiskChange() {
   await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("ls");\n');
 }
+const correct = () => writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
 
 describe("assess", () => {
   it("reports risk, whether a review is due and the consent question, without changing anything", async () => {
@@ -81,141 +88,105 @@ describe("assess", () => {
 });
 
 describe("review", () => {
-  it("runs only the chosen lenses in parallel, seals a clean change and then reports it as already reviewed", async () => {
+  it("prints tasks for only the chosen lenses, seals a clean change and then reports it as already reviewed", async () => {
     await highRiskChange();
-    const { agents: a, calls } = agents({ proof: [finding({ severity: "warning" })] });
-    const r = await review(repo, { lenses: ["security", "proof"], reason: "new process call" }, store, a);
+    const { result: r, tasks } = await reviewWith({ proof: [finding({ severity: "warning" })] }, ["security", "proof"]);
     expect(r.outcome).toBe("approved");
-    expect(calls.sort()).toEqual(["review:proof", "review:security"]);
+    expect(tasks).toEqual(["check-security", "check-proof"]);
     expect(r.advisories).toHaveLength(1);
     expect((await assess(repo, {}, store)).dueReason).toBe("already_reviewed");
   });
 
   it("asks for one correction when an introduced deterministic blocker is found, with its line budget", async () => {
     await highRiskChange();
-    const { agents: a, calls } = agents({ security: [finding()] });
-    const r = await review(repo, { lenses: ["security"], reason: "r" }, store, a);
+    const { result: r, tasks } = await reviewWith({ security: [finding()] });
     expect(r).toMatchObject({ outcome: "correction_required", budget: 2 });
     expect(r.blockers).toHaveLength(1);
-    expect(calls).not.toContain("challenge:1"); // deterministic needs no challenger
+    expect(tasks).not.toContain("check-challenger"); // deterministic needs no challenger
     expect(await store.isSealed(r.identity)).toBe(false);
-  });
-
-  it("sends inferential blockers to the challenger and drops the refuted ones", async () => {
-    await highRiskChange();
-    const { agents: a, calls } = agents(
-      { security: [finding({ evidence: "inferential" })] },
-      { challenge: async (fs) => fs.map((f) => ({ id: f.id, outcome: "refuted" as const, proof: ["guarded by caller"] })) },
-    );
-    const r = await review(repo, { lenses: ["security"], reason: "r" }, store, a);
-    expect(r.outcome).toBe("approved");
-    expect(r.advisories[0]).toMatchObject({ refuted: true });
-    expect(calls).toEqual(["review:security"]);
   });
 
   it("treats pre-existing problems as advisories and unknown causes as a decision for the user", async () => {
     await highRiskChange();
-    const pre = await review(repo, { lenses: ["security"], reason: "r" }, store, agents({ security: [finding({ cause: "pre_existing" })] }).agents);
-    expect(pre.outcome).toBe("approved");
+    expect((await reviewWith({ security: [finding({ cause: "pre_existing" })] })).result.outcome).toBe("approved");
     await writeFile(join(repo, "run.ts"), "export const other = 2;\n");
-    const unknown = await review(repo, { lenses: ["security"], reason: "r" }, store, agents({ security: [finding({ cause: "unknown" })] }).agents);
-    expect(unknown.outcome).toBe("needs_decision");
+    expect((await reviewWith({ security: [finding({ cause: "unknown" })] })).result.outcome).toBe("needs_decision");
   });
 
-  it("retries an incomplete lens once, then stops for a decision", async () => {
+  it("keeps an inferential finding the challenger did not refute as a blocker", async () => {
     await highRiskChange();
-    let n = 0;
-    const { agents: a } = agents({}, { review: async (lens) => ({ lens, complete: ++n > 1, findings: [], inspected: "x" }) });
-    expect((await review(repo, { lenses: ["security"], reason: "r" }, store, a)).outcome).toBe("approved");
-    const never = agents({}, { review: async (lens) => ({ lens, complete: false, findings: [], inspected: "x" }) });
-    await writeFile(join(repo, "run.ts"), "export const z = 1;\n");
-    expect((await review(repo, { lenses: ["security"], reason: "r" }, store, never.agents)).outcome).toBe("needs_decision");
+    const { result: r, tasks } = await reviewWith({ security: [finding({ evidence: "inferential" })] }, ["security"], "inconclusive");
+    expect(tasks).toContain("check-challenger");
+    expect(r).toMatchObject({ outcome: "correction_required", blockers: [expect.objectContaining({ id: "security-1" })] });
   });
 
   it("stops for a decision instead of reviewing a change too large for a reviewer", async () => {
     await writeFile(join(repo, "big.ts"), Array.from({ length: 12_000 }, (_, i) => `export const value${i} = "${"x".repeat(20)}";`).join("\n"));
-    const { agents: a, calls } = agents({});
-    const r = await review(repo, { lenses: ["proof"], reason: "r" }, store, a);
+    const { result: r, tasks } = await reviewWith({}, ["proof"]);
     expect(r.outcome).toBe("needs_decision");
     expect(r.message).toMatch(/smaller/);
-    expect(calls).toEqual([]);
+    expect(tasks).toEqual([]);
   });
 
   it("refuses while Checkpoint is off, when nothing changed, or with no lens", async () => {
-    await expect(review(repo, { lenses: ["security"], reason: "r" }, store, agents({}).agents)).rejects.toThrow(/nothing to review/i);
+    await expect(review(repo, { lenses: ["security"], reason: "r" }, store)).rejects.toThrow(/nothing to review/i);
     await highRiskChange();
-    await expect(review(repo, { lenses: [], reason: "r" }, store, agents({}).agents)).rejects.toThrow(/lens/i);
+    await expect(review(repo, { lenses: [], reason: "r" }, store)).rejects.toThrow(/lens/i);
     await store.setMode("off", "repo");
-    await expect(review(repo, { lenses: ["security"], reason: "r" }, store, agents({}).agents)).rejects.toThrow(/off/i);
+    await expect(review(repo, { lenses: ["security"], reason: "r" }, store)).rejects.toThrow(/off/i);
   });
 });
 
 describe("confirm", () => {
   it("checks the one correction against the blockers and seals the corrected change", async () => {
     await highRiskChange();
-    const { agents: a, calls } = agents({ security: [finding()] });
-    const first = await review(repo, { lenses: ["security"], reason: "r" }, store, a);
-    await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
-    const done = await confirm(repo, store, a);
+    const { result: first } = await reviewWith({ security: [finding()] });
+    await correct();
+    const { result: done, asked } = await confirmWith();
+    expect(asked).toBe(true);
     expect(done).toMatchObject({ outcome: "approved", corrects: first.identity });
-    expect(calls).toContain("confirm:1");
     expect(await store.isSealed(done.identity)).toBe(true);
-    await expect(confirm(repo, store, a)).rejects.toThrow(/no correction/i);
+    await expect(confirm(repo, store)).rejects.toThrow(/no correction/i);
   });
 
   it("stops for a decision when a blocker still fails, the correction is off topic or over budget", async () => {
     await highRiskChange();
-    const failing = agents(
-      { security: [finding()] },
-      { confirm: async (bs) => ({ results: bs.map((b) => ({ id: b.id, outcome: "still_failing" as const, proof: [] })), onTopic: true, offTopicPaths: [] }) },
-    );
-    await review(repo, { lenses: ["security"], reason: "r" }, store, failing.agents);
-    await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
-    expect(await confirm(repo, store, failing.agents)).toMatchObject({ outcome: "needs_decision" });
+    await reviewWith({ security: [finding()] });
+    await correct();
+    expect((await confirmWith("still_failing")).result).toMatchObject({ outcome: "needs_decision" });
 
     await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("id");\n');
-    const big = agents({ security: [finding()] });
-    await review(repo, { lenses: ["security"], reason: "r" }, store, big.agents);
+    await reviewWith({ security: [finding()] });
+    await correct();
+    const off = (await confirmWith("fixed", false)).result;
+    expect(off).toMatchObject({ outcome: "needs_decision" });
+    expect(off.message).toMatch(/unrelated paths: other.ts/);
+
+    await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("whoami");\n');
+    await reviewWith({ security: [finding()] });
     await writeFile(join(repo, "run.ts"), Array.from({ length: 30 }, (_, i) => `export const v${i} = ${i};`).join("\n") + "\n");
-    const over = await confirm(repo, store, big.agents);
-    expect(over).toMatchObject({ outcome: "needs_decision" });
-    expect(over.message).toMatch(/budget/i);
-    expect(big.calls).not.toContain("confirm:1");
+    const over = await confirmWith();
+    expect(over.result).toMatchObject({ outcome: "needs_decision" });
+    expect(over.result.message).toMatch(/budget/i);
+    expect(over.asked).toBe(false);
   });
 });
 
 describe("failures that must not lose work", () => {
-  it("a lens that throws is retried once and never discards the other lenses", async () => {
+  it("an invalid confirmer result keeps the correction open for another try", async () => {
     await highRiskChange();
-    let calls = 0;
-    const { agents: a } = agents(
-      {},
-      {
-        review: async (lens) => {
-          if (lens === "security" && calls++ === 0) throw new Error("network down");
-          return { lens, complete: true, findings: [], inspected: "all" };
-        },
-      },
-    );
-    expect((await review(repo, { lenses: ["security", "proof"], reason: "r" }, store, a)).outcome).toBe("approved");
-  });
-
-  it("a confirmer that fails keeps the correction open for another try", async () => {
-    await highRiskChange();
-    const { agents: a } = agents({ security: [finding()] });
-    await review(repo, { lenses: ["security"], reason: "r" }, store, a);
-    await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
-    const broken = agents({}, { confirm: async () => { throw new Error("timeout"); } });
-    await expect(confirm(repo, store, broken.agents)).rejects.toThrow(/timeout/);
-    expect((await confirm(repo, store, a)).outcome).toBe("approved");
+    await reviewWith({ security: [finding()] });
+    await correct();
+    await confirm(repo, store);
+    await expect(capture(repo, { confirm: true }, "{}", store)).rejects.toThrow(/schema/);
+    expect((await confirmWith()).result.outcome).toBe("approved");
   });
 
   it("an unchanged tree keeps the correction open instead of using it up", async () => {
     await highRiskChange();
-    const { agents: a } = agents({ security: [finding()] });
-    await review(repo, { lenses: ["security"], reason: "r" }, store, a);
-    expect((await confirm(repo, store, a)).outcome).toBe("needs_decision");
-    await writeFile(join(repo, "run.ts"), 'import { exec } from "node:child_process";\nexport const go = () => exec("pwd");\n');
-    expect((await confirm(repo, store, a)).outcome).toBe("approved");
+    await reviewWith({ security: [finding()] });
+    expect((await confirmWith()).result.outcome).toBe("needs_decision");
+    await correct();
+    expect((await confirmWith()).result.outcome).toBe("approved");
   });
 });

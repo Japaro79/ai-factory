@@ -45,7 +45,8 @@ Usage:
   factory codegraph init --cwd <project root>  Initialize CodeGraph in exactly that git root (never home or temp).
   factory gate init | run [--no-cache]         Pre-commit review of staged files against the repo rules (AGENTS.md).
   factory usage [record --agent <a> --event <e>]  Show (or record) the local usage log; nothing leaves the machine.
-  factory check assess|review|confirm|mode|hook  Checkpoint: review a change at the depth its risk calls for.
+  factory check assess|review|capture|confirm|mode|hook  Checkpoint: review a change at the depth its risk
+                                              calls for, with the agent's own check-* subagents (no AI call here).
                                               Run "factory check" for its options.
   factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
 
@@ -78,6 +79,10 @@ const OPTIONS = {
   "escalate-reason": { type: "string" },
   consent: { type: "string" },
   scope: { type: "string" },
+  lens: { type: "string" },
+  file: { type: "string" },
+  challenge: { type: "boolean", default: false },
+  confirm: { type: "boolean", default: false },
   json: { type: "boolean", default: false },
   quiet: { type: "boolean", default: false },
   "no-gitignore": { type: "boolean", default: false },
@@ -136,6 +141,10 @@ async function main(): Promise<number> {
       escalateReason: values["escalate-reason"],
       consent: values.consent,
       scope: values.scope,
+      lens: values.lens,
+      file: values.file,
+      challenge: values.challenge === true,
+      confirm: values.confirm === true,
     });
     if (output) (code === 1 ? console.error : console.log)(output);
     return code;
@@ -176,8 +185,7 @@ async function main(): Promise<number> {
       return 0;
     }
     if (positionals[1] === "run") {
-      const { checkModel } = await import("./checkpoint/cli.ts");
-      const { ClaudeGateReviewer } = await import("./checkpoint/claudeAgents.ts");
+      const { checkModel, ClaudeGateReviewer } = await import("./checkpoint/claudeAgents.ts");
       const r = await gate.runGate(cwd, new ClaudeGateReviewer(await checkModel(), cwd), { noCache: values["no-cache"] === true });
       (r.code ? console.error : console.log)(r.message);
       return r.code;

@@ -29,8 +29,9 @@ const readJson = async <T>(path: string): Promise<T | undefined> => {
 };
 
 /**
- * Checkpoint's records for one repository: seals of approved changes, the open correction, session baselines and the
- * per-repository switch. They live in the git directory, so they are never committed and are shared by worktrees.
+ * Checkpoint's records for one repository: seals of approved changes, the open correction, the pending review and the
+ * files its subagent tasks read, session baselines and the per-repository switch. They live in the git directory, so
+ * they are never committed and are shared by worktrees.
  */
 export class CheckStore {
   readonly dir: string;
@@ -95,12 +96,29 @@ export class CheckStore {
   }
 
   async setOpenCorrection(value: unknown | undefined): Promise<void> {
-    if (value === undefined) {
-      const { rm } = await import("node:fs/promises");
-      await rm(join(this.dir, "open.json"), { force: true });
-      return;
-    }
+    if (value === undefined) return this.removeFiles("open.json");
     await this.write("open.json", JSON.stringify(value, null, 2) + "\n");
+  }
+
+  /** The review waiting for its subagents' results through `factory check capture`. */
+  async pendingReview<T>(): Promise<T | undefined> {
+    return readJson<T>(join(this.dir, "pending.json"));
+  }
+
+  async setPendingReview(value: unknown | undefined): Promise<void> {
+    if (value === undefined) return this.removeFiles("pending.json");
+    await this.write("pending.json", JSON.stringify(value, null, 2) + "\n");
+  }
+
+  /** Writes a file a subagent task reads (the frozen change, a correction) and returns its absolute path. */
+  async writeTaskFile(name: string, content: string): Promise<string> {
+    await this.write(name, content);
+    return join(this.dir, name);
+  }
+
+  async removeFiles(...names: string[]): Promise<void> {
+    const { rm } = await import("node:fs/promises");
+    for (const name of names) await rm(join(this.dir, name), { force: true });
   }
 
   /** Identity of the change that was already there when a session started, and whether it was reminded about. */

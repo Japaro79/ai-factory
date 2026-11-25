@@ -1,8 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
-import type { AgentSettings } from "../adapters/claudeAgents.ts";
-import { FACTORY_HOME } from "../adapters/projectRegistry.ts";
-import { assess, confirm, review, type CheckAgents } from "./flow.ts";
+import { resolve } from "node:path";
+import { assess, capture, confirm, review, type CaptureTarget } from "./flow.ts";
 import { handleHook } from "./hook.ts";
 import { CheckStore, DEFAULT_GLOBAL_SETTINGS } from "./store.ts";
 
@@ -18,30 +16,15 @@ export interface CheckArgs {
   escalateReason?: string;
   consent?: string;
   scope?: string;
+  lens?: string;
+  file?: string;
+  challenge?: boolean;
+  confirm?: boolean;
 }
 
 export interface CheckDeps {
   settings?: string;
-  agents?: () => Promise<CheckAgents>;
   stdin?: () => Promise<string>;
-}
-
-export const HARNESS_SETTINGS = join(FACTORY_HOME, "harness.json");
-const DEFAULT_CHECK_MODEL: AgentSettings = { model: "claude-sonnet-5-5", effort: "medium", maxTurns: 4 };
-
-/** Model for Checkpoint's reviewers, from ~/.ai-factory/harness.json ("checkpoint": {model, effort, maxTurns}). */
-export async function checkModel(file = HARNESS_SETTINGS): Promise<AgentSettings> {
-  try {
-    const parsed = JSON.parse(await readFile(file, "utf8")) as { checkpoint?: Partial<AgentSettings> };
-    return { ...DEFAULT_CHECK_MODEL, ...parsed.checkpoint };
-  } catch {
-    return DEFAULT_CHECK_MODEL;
-  }
-}
-
-async function defaultAgents(): Promise<CheckAgents> {
-  const { ClaudeCheckAgents } = await import("./claudeAgents.ts");
-  return new ClaudeCheckAgents(await checkModel());
 }
 
 const readStdin = async () => {
@@ -55,9 +38,13 @@ export const CHECK_USAGE = `factory check <action>
       Risk tier of the current change, whether a review is due, and the consent question to ask. Read-only.
   review --lenses security,failure,clarity,proof --reason "<what you touched and how>" --consent yes
       [--base-ref <ref> --committed-only]
-      Review the frozen change with the chosen lenses; only after the user said yes to this change.
+      Freeze the change and print one subagent task per lens (exit 2, outcome review_pending); only after the
+      user said yes to this change. No AI is called: run each task's check-<lens> subagent, then capture it.
+  capture --lens <lens> | --challenge | --confirm [--file <result.json>]
+      Hand one subagent result back (JSON from the file, or stdin). It is validated against the task's schema; a
+      malformed result exits 1 and stores nothing. Prints the next task or the outcome.
   confirm
-      Check the one allowed correction against its blockers.
+      Check the one allowed correction's size, then print the check-confirmer task for its blockers.
   mode on|off|status [--scope global|repo]
       The user's switch. Off always wins; status only reads.
   hook
@@ -109,11 +96,22 @@ export async function checkCommand(args: CheckArgs, deps: CheckDeps = {}): Promi
         if (args.consent !== "yes") return fail("review needs --consent yes: ask the user the consent question from assess first.");
         if (!args.reason?.trim()) return fail('review needs --reason "<what you touched and how>".');
         const lenses = (args.lenses ?? "").split(",").map((l) => l.trim()).filter(Boolean);
-        const outcome = await review(args.cwd, { lenses, reason: args.reason, options }, new CheckStore(args.cwd, settings), await (deps.agents ?? defaultAgents)());
+        const outcome = await review(args.cwd, { lenses, reason: args.reason, options }, new CheckStore(args.cwd, settings));
+        return json(outcome, outcome.outcome === "approved" ? 0 : 2);
+      }
+      case "capture": {
+        const targets: CaptureTarget[] = [
+          ...(args.lens !== undefined ? [{ lens: args.lens }] : []),
+          ...(args.challenge ? [{ challenge: true as const }] : []),
+          ...(args.confirm ? [{ confirm: true as const }] : []),
+        ];
+        if (targets.length !== 1) return fail("capture needs exactly one of --lens <lens>, --challenge or --confirm.");
+        const text = args.file !== undefined ? await readFile(resolve(args.cwd, args.file), "utf8") : await (deps.stdin ?? readStdin)();
+        const outcome = await capture(args.cwd, targets[0]!, text, new CheckStore(args.cwd, settings));
         return json(outcome, outcome.outcome === "approved" ? 0 : 2);
       }
       case "confirm": {
-        const outcome = await confirm(args.cwd, new CheckStore(args.cwd, settings), await (deps.agents ?? defaultAgents)());
+        const outcome = await confirm(args.cwd, new CheckStore(args.cwd, settings));
         return json(outcome, outcome.outcome === "approved" ? 0 : 2);
       }
       default:

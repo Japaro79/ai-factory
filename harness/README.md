@@ -101,6 +101,11 @@ Subagent models can be set per agent in `~/.ai-factory/harness.json`:
 { "agents": { "factory-builder": { "opencode": "openai/gpt-5.5", "claude-code": "opus" } }, "checkpoint": { "model": "claude-sonnet-5-5" } }
 ```
 
+The `checkpoint` entry only sets the commit gate's reviewer model. Checkpoint reviews themselves call no AI from the
+factory: `factory check review` prints one task per lens, your agent runs its `check-*` subagents (set their models under
+`agents`, like any other subagent), and `factory check capture` validates each JSON result before the outcome is
+decided. The subagents read only the change file the task names, never the live worktree.
+
 Each block sits between `<!-- ai-factory:<name> -->` markers in the agent's instruction file (`~/.claude/CLAUDE.md`,
 `~/.codex/AGENTS.md`, `~/.config/opencode/AGENTS.md`), and Antigravity gets one always-on rule file per block in
 `~/.gemini/config/rules/`. Text outside our markers is never touched, and every file is backed up before it changes.
