@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Workspace, WorkspaceManager } from "../application/ports.ts";
 import type { ChangedFile, DiffSummary, FileStatus, Task } from "../domain/types.ts";
+import { GATE_SKIP_ENV } from "../checkpoint/gate.ts";
 import { exec, execOk } from "./shell.ts";
 
 const MAX_PATCH_CHARS = 200_000;
@@ -66,9 +67,9 @@ export class GitWorktrees implements WorkspaceManager {
     await execOk("git", ["-C", ws.path, "add", "-A"]);
     const staged = await exec("git", ["-C", ws.path, "diff", "--cached", "--quiet"]);
     if (staged.code === 0) return false;
-    // --no-verify: the factory reviews its own work (four reviewers and an approver) and ends in a pull request that the
-    // repository's checks review again, so the repository's pre-commit gate must not block its commits.
-    await execOk("git", ["-C", ws.path, "commit", "-q", "--no-verify", "-m", message]);
+    // The factory reviews its own work (four reviewers and an approver) and ends in a pull request the repository's checks
+    // review again, so only the review gate steps aside; the repository's other hooks (secret scanners…) still run.
+    await execOk("git", ["-C", ws.path, "commit", "-q", "-m", message], { env: { ...process.env, [GATE_SKIP_ENV]: "1" } });
     return true;
   }
 

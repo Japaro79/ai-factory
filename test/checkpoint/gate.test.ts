@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { gateCommand, type GateArgs } from "../../src/checkpoint/cli.ts";
-import { initGate, runGate } from "../../src/checkpoint/gate.ts";
+import { GATE_SKIP_ENV, initGate, runGate } from "../../src/checkpoint/gate.ts";
 import { CheckStore } from "../../src/checkpoint/store.ts";
 
 let repo: string;
@@ -226,6 +226,24 @@ describe("factory gate run (the pre-commit hook)", () => {
     await writeFile(join(repo, "notes.md"), "x\n");
     git("add", ".");
     expect((await runGate(repo)).code).toBe(0);
+  });
+
+  it("steps aside only for the issue factory's own commits, through its environment variable", async () => {
+    await writeFile(join(repo, "a.ts"), "export const a = 2;\n");
+    git("add", "a.ts");
+    process.env[GATE_SKIP_ENV] = "1";
+    try {
+      expect(await runGate(repo)).toEqual({ code: 0, message: "" });
+    } finally {
+      delete process.env[GATE_SKIP_ENV];
+    }
+    expect((await runGate(repo)).code).toBe(1);
+  });
+
+  it("the CLI loads the issue factory's AI adapters only for run and poll", async () => {
+    const source = await readFile(join(import.meta.dirname, "../../src/cli.ts"), "utf8");
+    expect(source).not.toMatch(/^import .* from "\.\/wire\.ts";$/m);
+    expect(source).toMatch(/await import\("\.\/wire\.ts"\)/);
   });
 
   it("calls no AI: it takes no reviewer and the gate path imports no Claude SDK", async () => {

@@ -61,6 +61,8 @@ const DEFAULTS: GateConfig = { files: ["*"], exclude: [], rules: "AGENTS.md", st
 const HOOK_MARK = "# ai-factory:gate";
 const GATE_CHANGE_FILE = "gate-change.txt";
 const GATE_CAPTURE = "factory gate capture --file <result.json>";
+/** Set to "1" by the issue factory for its own commits: the gate steps aside, every other hook still runs. */
+export const GATE_SKIP_ENV = "AI_FACTORY_GATE_SKIP";
 export const UNSEALED_BLOCKED =
   'gate: commit blocked: the staged change has no review seal. Ask your agent to run "factory gate review", run the check-gate task and "factory gate capture", then commit again. To let unsealed commits through in this repository, set "strict": false in .factory/gate.json.';
 export const UNSEALED_WARNING =
@@ -186,6 +188,9 @@ export async function captureGate(cwd: string, text: string): Promise<GateOutcom
  * lets it through (exit 0).
  */
 export async function runGate(cwd: string): Promise<{ code: number; message: string }> {
+  // The issue factory reviews its own work and ends in a pull request; it sets this for its commits only, so the
+  // repository's other pre-commit hooks (secret scanners, linters) still run on them.
+  if (process.env[GATE_SKIP_ENV] === "1") return { code: 0, message: "" };
   const { candidate, config, reviewed } = await stagedChange(cwd);
   if (!reviewed.changes.length) return { code: 0, message: NOTHING };
   if (await new CheckStore(candidate.root).isSealed(sealKey(candidate.identity))) return { code: 0, message: "" };

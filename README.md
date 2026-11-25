@@ -153,7 +153,7 @@ the printed task to its installed `check-gate` subagent and hands the JSON resul
 `factory gate capture --file <result.json>`, which seals a passed staged change. The hook (`factory gate run`) only
 checks that exactly the staged change has that seal. Without one (for example, a commit you make from the terminal) it
 blocks the commit and says how to get a seal; set `"strict": false` in `.factory/gate.json` to only warn instead.
-`git commit --no-verify` skips the hook once. The issue factory's own commits skip it: the factory reviews its work
+`git commit --no-verify` skips every hook once. The issue factory's own commits skip only the gate: the factory reviews its work
 itself and ends in a pull request that the repository's checks review again.
 
 Checkpoint is also a command you can run yourself: `factory check assess` rates the current change, and

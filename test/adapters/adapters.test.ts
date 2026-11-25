@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pendingTasks } from "../../src/adapters/githubCli.ts";
 import { GitWorktrees, parseDiff } from "../../src/adapters/gitWorktrees.ts";
+import { GATE_SKIP_ENV } from "../../src/checkpoint/gate.ts";
 import { execOk } from "../../src/adapters/shell.ts";
 import { ShellChecks } from "../../src/adapters/shellChecks.ts";
 import { expandEnv, loadConfig } from "../../src/config.ts";
@@ -79,17 +80,21 @@ describe("GitWorktrees (real git, local remote)", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("commits even when the repository's pre-commit hook blocks (the factory reviews its own work)", async () => {
+  it("still runs the repository's other hooks, and only asks the gate to step aside", async () => {
     const hooks = join(repo, ".git", "hooks");
     await mkdir(hooks, { recursive: true });
-    await writeFile(join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n");
+    const hook = join(hooks, "pre-commit");
+    // A hook that blocks unless the gate bypass is set, and that leaves a mark so we know it ran.
+    await writeFile(hook, `#!/bin/sh\necho ran > "${join(root, "hook-ran").replace(/\\/g, "/")}"\n[ "$${GATE_SKIP_ENV}" = "1" ] || exit 1\n`);
+    await chmod(hook, 0o755);
     try {
       const wt = new GitWorktrees(repo, "main");
       const ws = await wt.create({ ...task, id: "issue-hook", externalId: 2 });
       await writeFile(join(ws.path, "hooked.txt"), "x\n");
       expect(await wt.commitAll(ws, "hooked change")).toBe(true);
+      expect(existsSync(join(root, "hook-ran"))).toBe(true);
     } finally {
-      await rm(join(hooks, "pre-commit"), { force: true });
+      await rm(hook, { force: true });
     }
   });
 
