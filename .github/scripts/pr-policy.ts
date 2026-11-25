@@ -11,9 +11,39 @@ export const SIZE_LIMIT = 400;
 const SIZE_EXCEPTION = "size:exception";
 const APPROVED = "status:approved";
 
-export interface PrFacts {
+/** Tests and docs written with a change; their lines do not count against the budget. Renamed files match on the new name. */
+export const EXCLUDED_PATTERNS = ["test/**", "**/*.test.ts", "**/*.md", "docs/**", ".github/ISSUE_TEMPLATE/**"];
+
+/** A minimal glob: `**` spans folders, `*` stays within one path segment. */
+function globToRegExp(pattern: string): RegExp {
+  const source = pattern
+    .split(/(\*\*\/|\*\*|\*)/)
+    .map((part) => {
+      if (part === "**/") return "(?:.*/)?";
+      if (part === "**") return ".*";
+      if (part === "*") return "[^/]*";
+      return part.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+    })
+    .join("");
+  return new RegExp(`^${source}$`);
+}
+
+const EXCLUDED = EXCLUDED_PATTERNS.map(globToRegExp);
+
+export function isExcluded(filename: string): boolean {
+  return EXCLUDED.some((re) => re.test(filename));
+}
+
+export interface LineCount {
   additions: number;
   deletions: number;
+}
+
+export interface PrFacts {
+  /** Changed lines outside EXCLUDED_PATTERNS; only these count against the budget. */
+  production: LineCount;
+  /** Every changed line, tests and docs included. */
+  total: number;
   labels: string[];
   body?: string;
 }
@@ -38,9 +68,10 @@ export interface CheckResult {
 }
 
 export function checkSize(pr: PrFacts, limit: number = SIZE_LIMIT): CheckResult {
-  const total = pr.additions + pr.deletions;
-  const counts = `${total} changed lines (+${pr.additions}/-${pr.deletions})`;
-  if (total <= limit) return { ok: true, message: `${counts}, within the ${limit}-line budget.` };
+  const { additions, deletions } = pr.production;
+  const production = additions + deletions;
+  const counts = `${production} production lines (+${additions}/-${deletions}; ${pr.total} total)`;
+  if (production <= limit) return { ok: true, message: `${counts}, within the ${limit}-line budget.` };
   if (pr.labels.includes(SIZE_EXCEPTION)) return { ok: true, warning: true, message: `${counts} exceed the ${limit}-line budget; allowed by ${SIZE_EXCEPTION}.` };
   return { ok: false, message: `${counts} exceed the ${limit}-line budget. Split it into stacked PRs, or ask a maintainer for ${SIZE_EXCEPTION}.` };
 }
@@ -125,9 +156,23 @@ export async function runFromEnv(deps: EntryDeps): Promise<boolean> {
   // Live facts, not the event payload: labels and the body may have changed since the event fired.
   const live = await deps.ghApi(`repos/${repo}/pulls/${event.pull_request.number}`);
   if (live.status !== "ok") throw new Error(`PR #${event.pull_request.number} not found.`);
+  const production: LineCount = { additions: 0, deletions: 0 };
+  let total = 0;
+  for (let page = 1; ; page++) {
+    const res = await deps.ghApi(`repos/${repo}/pulls/${event.pull_request.number}/files?per_page=100&page=${page}`);
+    if (res.status !== "ok") throw new Error(`Files of PR #${event.pull_request.number} not found.`);
+    const files = res.data as Array<{ filename: string; additions: number; deletions: number }>;
+    for (const file of files) {
+      total += file.additions + file.deletions;
+      if (isExcluded(file.filename)) continue;
+      production.additions += file.additions;
+      production.deletions += file.deletions;
+    }
+    if (files.length < 100) break;
+  }
   const pr: PrFacts = {
-    additions: live.data.additions,
-    deletions: live.data.deletions,
+    production,
+    total,
     labels: (live.data.labels as Array<{ name: string }>).map((l) => l.name),
     body: live.data.body ?? "",
   };

@@ -36,8 +36,8 @@ tracking. Run it; never just describe it.
    When you add or change a command, option or message, update its help text and docs. Route each task through the
    smallest useful setup, honoring the triggers when they truly hold, with the test-first policy and proportionate
    checks. Tick a task only after its outcome and checks were observed; update the document and its memory copy after
-   each task. Commit work units in reviewable slices of about 400 authored changed lines on the feature branch (branch
-   first when on the default branch), tests and docs together with the behavior, with a Conventional Commit message. A
+   each task. Commit work units in reviewable slices of about 400 authored changed lines of production code on the
+   feature branch (branch first when on the default branch), tests and docs together with the behavior, with a Conventional Commit message. A
    unit whose Risk line names a high-risk item gets its own commit so Checkpoint can review it alone; the last slice
    closes the feature. Record each task's commit in the document as evidence. Work-unit commits on the feature branch
    are part of authorized large work; push, pull requests and merges stay the user's decisions.
@@ -159,7 +159,8 @@ the work succeeds. When it resolves, size the task again and stay small while th
   Run focused checks while iterating and all applicable full checks when closing the task. Keep cost proportionate
   without hard limits, and keep the test-first policy, Checkpoint, safety and consent requirements.
 - About 400 authored changed lines per task (additions plus deletions) is a planning hint, never an acceptance
-  criterion, cap, stop or forced split, and never a Checkpoint trigger. Prefer the smallest coherent behavior with its
+  criterion, cap, stop or forced split, and never a Checkpoint trigger. The count is production code only: the tests
+  and docs written with it are excluded, so the hint never pushes toward fewer tests. Prefer the smallest coherent behavior with its
   tests and docs. If the right solution is bigger, say why briefly and continue. Never remove spaces, blank lines or
   comments to save lines, never skip tests, minify, add needless abstractions or split artificially. Pass this same
   hint to workers. A line limit from the user is a ceiling, not an exact target; never invent acceptance gates.
@@ -214,8 +215,8 @@ the work succeeds. When it resolves, size the task again and stay small while th
   next base. Record per commit the tier and outcome: granted, declined, passive, under budget, already reviewed or
   unavailable. An unavailable or failed assessment never lowers the tier: report the missing proof and never guess
   `due`. Never skip an existing delivery gate.
-- **Delivery.** When creating the document, forecast authored changed lines (additions plus deletions, generated
-  files excluded) from the task list, and keep a running count from work-unit commits. Pick one strategy per feature:
+- **Delivery.** When creating the document, forecast authored changed lines (additions plus deletions; tests, docs
+  and generated files excluded) from the task list, and keep a running count from work-unit commits. Pick one strategy per feature:
   `ask-on-risk` (default), `auto-chain`, `single-pr` or `exception-ok`. When the forecast or the count passes about 400
   lines, apply it before the next commit: `ask-on-risk` asks once for the chain strategy (`stacked-to-main` or
   `feature-branch-chain`); `auto-chain` asks only for a missing chain strategy and slices on its own. Remember both
