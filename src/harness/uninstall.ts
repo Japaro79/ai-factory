@@ -88,6 +88,9 @@ function dropOurEntries(cfg: Record<string, any>, fresh: Record<string, any>, ke
  */
 function stripJson(agent: AgentId, fresh: Record<string, any>, file: string, kept: string[], drop: ReadonlySet<Component>): (cfg: Record<string, any>) => Record<string, any> {
   const marks = (["guard", "hooks"] as const).flatMap((c) => (drop.has(c) ? COMPONENT_HOOK_MARKS[c] : []));
+  // A preset switch takes back the context7 server it added, while unchanged; uninstall keeps it, as it always has,
+  // because the user may rely on it outside the factory.
+  const dropDocs = drop.has("docs-mcp") && !COMPONENTS.every((c) => drop.has(c));
   return (cfg) => {
     switch (agent) {
       case "claude-code":
@@ -100,9 +103,11 @@ function stripJson(agent: AgentId, fresh: Record<string, any>, file: string, kep
       case "opencode":
         if (drop.has("subagents")) dropOurEntries(cfg, fresh, "agent", Object.keys(fresh.agent ?? {}), file, kept);
         if (drop.has("memory-mcp")) dropOurEntries(cfg, fresh, "mcp", [MEMORY_SERVER], file, kept);
+        if (dropDocs) dropOurEntries(cfg, fresh, "mcp", ["context7"], file, kept);
         break;
       case "antigravity":
         if (drop.has("memory-mcp")) dropOurEntries(cfg, fresh, "mcpServers", [MEMORY_SERVER], file, kept);
+        if (dropDocs) dropOurEntries(cfg, fresh, "mcpServers", ["context7"], file, kept);
         break;
     }
     return cfg;

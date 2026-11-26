@@ -278,6 +278,28 @@ describe("switching preset", () => {
     expect(listBlocks(await read(".claude/CLAUDE.md"))).toEqual(ALL_BLOCKS);
   });
 
+  it("a switch to rules or minimal removes the context7 server full added to every agent", async () => {
+    for (const preset of ["rules", "minimal"]) {
+      expect(await run("install", "full")).toBe(0);
+      expect(Object.keys((await json(".config/opencode/opencode.json")).mcp)).toContain("context7");
+      expect(await run("install", preset)).toBe(0);
+      expect(err).toEqual([]);
+      expect(Object.keys((await json(".config/opencode/opencode.json")).mcp)).toEqual(["ai-factory-memory"]);
+      expect(Object.keys((await json(".gemini/config/mcp_config.json")).mcpServers)).toEqual(["ai-factory-memory"]);
+      expect(await read(".codex/config.toml")).not.toContain("context7");
+    }
+  });
+
+  it("a switch keeps a context7 server the user changed", async () => {
+    expect(await run("install", "full")).toBe(0);
+    const file = ".config/opencode/opencode.json";
+    const cfg = await json(file);
+    cfg.mcp.context7.enabled = false;
+    await writeFile(join(home, file), JSON.stringify(cfg, null, 2));
+    expect(await run("install", "rules")).toBe(0);
+    expect((await json(file)).mcp.context7).toEqual({ ...cfg.mcp.context7 });
+  });
+
   it("a dry run of a switch lists what would be removed and changes nothing", async () => {
     expect(await run("install")).toBe(0);
     const before = await snapshot();
