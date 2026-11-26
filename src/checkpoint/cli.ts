@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { assess, capture, confirm, review, type CaptureTarget } from "./flow.ts";
+import { assess, capture, confirm, findReceipt, parseCriteria, review, type CaptureTarget, type Criterion, type Receipt } from "./flow.ts";
 import { captureGate, reviewGate, runGate, UNSEALED_BLOCKED, UNSEALED_WARNING } from "./gate.ts";
 import { handleHook } from "./hook.ts";
 import { CheckStore, DEFAULT_GLOBAL_SETTINGS } from "./store.ts";
@@ -21,6 +21,10 @@ export interface CheckArgs {
   file?: string;
   challenge?: boolean;
   confirm?: boolean;
+  /** A file of acceptance criteria for review, one per line; a relative path is read from `cwd`. */
+  criteria?: string;
+  /** receipt prints the whole record as JSON instead of the summary. */
+  json?: boolean;
 }
 
 export interface CheckDeps {
@@ -38,19 +42,40 @@ export const CHECK_USAGE = `factory check <action>
   assess [--base-ref <ref> --committed-only] [--escalate-item <1-6> --escalate-reason "<line>"]
       Risk tier of the current change, whether a review is due, and the consent question to ask. Read-only.
   review --lenses security,failure,clarity,proof --reason "<what you touched and how>" --consent yes
-      [--base-ref <ref> --committed-only]
+      [--base-ref <ref> --committed-only] [--criteria <file>]
       Freeze the change and print one subagent task per lens (exit 2, outcome review_pending); only after the
       user said yes to this change. No AI is called: run each task's check-<lens> subagent, then capture it.
+      --criteria takes acceptance criteria, one per line (the S# lines of a feature document, or 3 to 5 lines;
+      at most 12 and 4 KB; a relative path is read from --cwd). Every lens answers each one with met, not_met
+      or unproven; a criterion any lens finds not met blocks approval.
   capture --lens <lens> | --challenge | --confirm [--file <result.json>]
       Hand one subagent result back (JSON from the file, or stdin). It is validated against the task's schema and
       must echo the task's nonce; a malformed result or another task's result exits 1 and stores nothing. Prints the
       next task or the outcome. A relative --file is read from --cwd.
   confirm
       Check the one allowed correction's size, then print the check-confirmer task for its blockers.
+  receipt [<identity or prefix>] [--json]
+      What a seal covered: the outcome, when, the lenses, each criterion's verdicts, the blockers and the
+      advisories. Without an id, the latest seal that has a receipt. --json prints the whole record. Read-only.
   mode on|off|status [--scope global|repo]
       The user's switch. Off always wins; status only reads.
   hook
       Agent session hook (reads the hook payload on stdin).`;
+
+/** A receipt as a person reads it: the short identity and outcome first, then what the review covered. */
+function summarize(r: Receipt): string {
+  const lines = [`Receipt ${r.identity.slice(0, 12)}: ${r.outcome}`, `Sealed: ${r.sealedAt}`, `Lenses: ${r.lenses.join(", ")}`];
+  if (r.corrects) lines.push(`Corrects: ${r.corrects.slice(0, 12)}`);
+  if (r.criteria?.length) {
+    lines.push("Criteria:");
+    for (const c of r.criteria) {
+      const verdicts = Object.entries(c.verdicts).map(([lens, v]) => `${lens} ${v!.verdict}`);
+      lines.push(`  ${c.id} ${c.text}: ${verdicts.join(", ") || "no verdict"}`);
+    }
+  }
+  lines.push(`Blockers: ${r.blockers.length}`, `Advisories: ${r.advisories.length}`, ...r.advisories.map((a) => `  - ${a.claim}`));
+  return lines.join("\n");
+}
 
 /** Runs one `factory check` action and returns what to print (JSON for agents) and the exit code. */
 export async function checkCommand(args: CheckArgs, deps: CheckDeps = {}): Promise<{ code: number; output: string }> {
@@ -98,8 +123,23 @@ export async function checkCommand(args: CheckArgs, deps: CheckDeps = {}): Promi
         if (args.consent !== "yes") return fail("review needs --consent yes: ask the user the consent question from assess first.");
         if (!args.reason?.trim()) return fail('review needs --reason "<what you touched and how>".');
         const lenses = (args.lenses ?? "").split(",").map((l) => l.trim()).filter(Boolean);
-        const outcome = await review(args.cwd, { lenses, reason: args.reason, options }, new CheckStore(args.cwd, settings));
+        let criteria: Criterion[] | undefined;
+        if (args.criteria !== undefined) {
+          const path = resolve(args.cwd, args.criteria);
+          let text: string;
+          try {
+            text = await readFile(path, "utf8");
+          } catch (error) {
+            return fail(`Cannot read the criteria file ${path}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          criteria = parseCriteria(text);
+        }
+        const outcome = await review(args.cwd, { lenses, reason: args.reason, options, criteria }, new CheckStore(args.cwd, settings));
         return json(outcome, outcome.outcome === "approved" ? 0 : 2);
+      }
+      case "receipt": {
+        const receipt = await findReceipt(new CheckStore(args.cwd, settings), args.arg);
+        return args.json ? json(receipt) : { code: 0, output: summarize(receipt) };
       }
       case "capture": {
         const targets: CaptureTarget[] = [

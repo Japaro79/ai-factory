@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { diffTrees, freezeCandidate, type FreezeOptions } from "./candidate.ts";
-import { changeBlock, correctionBlock } from "./instructions.ts";
+import { changeBlock, correctionBlock, criteriaBlock } from "./instructions.ts";
 import { assessRisk, correctionBudget, decideDue, type DueReason, type RiskLevel, type RiskReason } from "./risk.ts";
 import { challengeSchema, confirmSchema, jsonSchema, lensSchema, parseResult } from "./schemas.ts";
 import type { CheckStore, Mode } from "./store.ts";
@@ -29,11 +29,45 @@ export interface Finding {
 
 export type IdFinding = Finding & { id: string; lens: LensName };
 
+/** One acceptance criterion the reviewers judge the change against (`--criteria <file>`). */
+export interface Criterion {
+  id: string;
+  text: string;
+}
+
+export type Verdict = "met" | "not_met" | "unproven";
+
+export interface CriterionVerdict {
+  id: string;
+  verdict: Verdict;
+  reason: string;
+}
+
 export interface LensResult {
   lens: LensName;
   complete: boolean;
   findings: Finding[];
   inspected: string;
+  /** One verdict per criterion of the review; absent when the review has no criteria. */
+  criteria?: CriterionVerdict[];
+}
+
+/** A criterion with every lens's verdict and reason, as a receipt keeps it. */
+export type CriterionRecord = Criterion & { verdicts: Partial<Record<LensName, { verdict: Verdict; reason: string }>> };
+
+/** What a seal covered, kept as `receipts/<identity>.json` and printed by `factory check receipt`. */
+export interface Receipt {
+  identity: string;
+  baseTree: string;
+  candidateTree: string;
+  lenses: LensName[];
+  reason: string;
+  criteria?: CriterionRecord[];
+  blockers: IdFinding[];
+  advisories: Advisory[];
+  outcome: "approved";
+  sealedAt: string;
+  corrects?: string;
 }
 
 export interface Assessment {
@@ -62,6 +96,8 @@ export interface ReviewOutcome {
   budget?: number;
   /** The identity a corrected change replaced, when approved through confirm. */
   corrects?: string;
+  /** Each criterion with every lens's verdict, when the review was started with criteria. */
+  criteria?: Array<Criterion & { verdicts: Partial<Record<LensName, Verdict>> }>;
   message: string;
 }
 
@@ -78,6 +114,8 @@ export interface ReviewTask {
   correctionFile?: string;
   findings?: BriefFinding[];
   blockers?: BriefFinding[];
+  /** The acceptance criteria the lens must answer one by one, when the review has them. */
+  criteria?: Criterion[];
   schema: unknown;
 }
 
@@ -96,7 +134,10 @@ export interface PendingOutcome {
 
 interface PendingReview {
   identity: string;
+  /** Absent in a review started before receipts existed. */
+  baseTree?: string;
   candidateTree: string;
+  criteria?: Criterion[];
   options: FreezeOptions;
   lenses: LensName[];
   reason: string;
@@ -123,6 +164,9 @@ interface OpenCorrection {
   /** Identity of the corrected change the confirmer task was printed for. */
   confirming?: string;
   confirmNonce?: string;
+  /** What the receipt of the corrected change repeats from the review; absent in a correction opened before receipts. */
+  reason?: string;
+  criteria?: CriterionRecord[];
 }
 
 export type CaptureTarget = { lens: string } | { challenge: true } | { confirm: true };
@@ -163,14 +207,68 @@ const MOVED = "the change moved since review; run factory check review again";
 const NO_CONFIRM = "No confirmer result is expected; run factory check confirm first.";
 const MOVED_CONFIRM = "the change moved since confirm; run factory check confirm again";
 
+/** The most criteria one review takes, and the largest criteria file: a short list, never the whole request. */
+export const MAX_CRITERIA = 12;
+export const MAX_CRITERIA_BYTES = 4096;
+
+/**
+ * Reads a criteria file: one criterion per non-empty line. A leading "- " is dropped; a leading `S<n>` token, optionally
+ * followed by " — ", "-" or ":", becomes the id (the S# lines of a feature document); any other line gets `C<line>`,
+ * numbered by its position among the criteria. Too many, too large, empty or repeated ids are refused.
+ */
+export function parseCriteria(text: string): Criterion[] {
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > MAX_CRITERIA_BYTES) throw new Error(`The criteria file is ${bytes} bytes; at most ${MAX_CRITERIA_BYTES} (4 KB) are allowed.`);
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (!lines.length) throw new Error("The criteria file has no criteria; write one per line.");
+  if (lines.length > MAX_CRITERIA) throw new Error(`The criteria file has ${lines.length} criteria; at most ${MAX_CRITERIA} are allowed.`);
+  const criteria = lines.map((line, i) => {
+    const item = line.replace(/^-\s+/, "");
+    const tagged = /^(S\d+)(?:\s*(?:—|-|:)\s*|\s+)(.+)$/.exec(item);
+    return tagged ? { id: tagged[1]!, text: tagged[2]!.trim() } : { id: `C${i + 1}`, text: item };
+  });
+  const seen = new Set<string>();
+  for (const { id } of criteria) {
+    if (seen.has(id)) throw new Error(`The criteria file names ${id} twice; give every criterion its own id.`);
+    seen.add(id);
+  }
+  return criteria;
+}
+
 const lensTask = (store: CheckStore, p: PendingReview, lens: LensName): ReviewTask => ({
   lens,
   agent: `check-${lens}`,
   nonce: p.nonces[lens]!,
   changeFile: join(store.worktreeDir, CHANGE_FILE),
   reason: p.reason,
+  ...(p.criteria ? { criteria: p.criteria } : {}),
   schema: jsonSchema(lensSchema),
 });
+
+/**
+ * Checks a lens result's criterion verdicts against the review's criteria. An unknown or repeated id is malformed and
+ * refused before anything is stored; a criterion left without a verdict makes the result incomplete, which gets the one
+ * retry. A review without criteria ignores any verdicts, exactly as before criteria existed.
+ */
+function checkVerdicts(p: PendingReview, result: LensResult): LensResult {
+  if (!p.criteria) {
+    const { criteria: _ignored, ...rest } = result;
+    return rest;
+  }
+  const ids = p.criteria.map((c) => c.id);
+  const given = result.criteria ?? [];
+  const malformed = (detail: string) => new Error(`The ${result.lens} lens result does not match its schema; nothing was stored.\n${detail}`);
+  for (const [i, v] of given.entries()) {
+    if (!ids.includes(v.id)) throw malformed(`Unknown criterion id: ${v.id} (expected: ${ids.join(", ")}).`);
+    if (given.findIndex((o) => o.id === v.id) !== i) throw malformed(`Criterion ${v.id} has more than one verdict.`);
+  }
+  const missing = ids.filter((id) => !given.some((v) => v.id === id));
+  if (!missing.length) return result;
+  return { ...result, complete: false, inspected: `${result.inspected}; no verdict for criteria ${missing.join(", ")}` };
+}
 
 const missingLenses = (p: PendingReview) => p.lenses.filter((l) => !p.results.some((r) => r.lens === l));
 
@@ -208,7 +306,7 @@ async function clearPending(store: CheckStore): Promise<void> {
 /** Starts a review: freezes the change, writes it for the subagents and prints one task per lens. Calls no AI. */
 export async function review(
   cwd: string,
-  input: { lenses: string[]; reason: string; options?: FreezeOptions },
+  input: { lenses: string[]; reason: string; options?: FreezeOptions; criteria?: Criterion[] },
   store: CheckStore,
 ): Promise<ReviewOutcome | PendingOutcome> {
   const mode = await store.mode();
@@ -230,9 +328,12 @@ export async function review(
       message: `The change is too large for one review (${candidate.patch.length} characters of diff); review it as smaller commits.`,
     };
   }
+  const criteria = input.criteria?.length ? input.criteria : undefined;
   const pending: PendingReview = {
     identity: candidate.identity,
+    baseTree: candidate.baseTree,
     candidateTree: candidate.candidateTree,
+    ...(criteria ? { criteria } : {}),
     options,
     lenses,
     reason: input.reason,
@@ -243,7 +344,7 @@ export async function review(
     nonces: Object.fromEntries(lenses.map((lens) => [lens, randomUUID()])),
   };
   await store.withLock(async () => {
-    await store.writeTaskFile(CHANGE_FILE, changeBlock(candidate));
+    await store.writeTaskFile(CHANGE_FILE, (criteria ? criteriaBlock(criteria) : "") + changeBlock(candidate));
     await store.setPendingReview(pending);
   });
   return {
@@ -283,14 +384,15 @@ export async function capture(cwd: string, target: CaptureTarget, text: string, 
   const lens = target.lens as LensName;
   checkLens(first, target.lens);
   const { nonce, ...parsed } = parseResult(lensSchema, text, `${lens} lens`);
-  const result: LensResult = { lens, ...parsed };
+  const raw: LensResult = { lens, ...parsed };
+  checkVerdicts(first, raw);
   checkNonce(first.nonces?.[lens], nonce);
   await unmoved();
   return store.withLock(async () => {
     const p = await current(store, first.identity);
     checkLens(p, lens);
     checkNonce(p.nonces?.[lens], nonce);
-    return takeLens(store, p, result);
+    return takeLens(store, p, checkVerdicts(p, raw));
   });
 }
 
@@ -333,10 +435,16 @@ async function takeLens(store: CheckStore, p: PendingReview, result: LensResult)
 
 /** Every lens is in: the same deterministic decision as always, after one challenger round when it is needed. */
 async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id: string; outcome: string }>): Promise<ReviewOutcome | PendingOutcome> {
-  const base = { identity: p.identity, lenses: p.lenses };
   const results = p.lenses.map((lens) => p.results.find((r) => r.lens === lens)!);
-  const all: IdFinding[] = results.flatMap((r) => r.findings.map((f, i) => ({ ...f, lens: r.lens, id: `${r.lens}-${i + 1}` })));
-  const advisories: Advisory[] = all.filter((f) => !SEVERE.has(f.severity) || f.cause === "pre_existing");
+  const records = criterionRecords(p, results);
+  const base = {
+    identity: p.identity,
+    lenses: p.lenses,
+    ...(records ? { criteria: records.map((c) => ({ id: c.id, text: c.text, verdicts: mapVerdicts(c, (v) => v.verdict) })) } : {}),
+  };
+  // A lens's own findings keep their ids; its unmet criteria follow them as findings of that lens.
+  const all: IdFinding[] = results.flatMap((r) => [...r.findings, ...unmetFindings(p, r)].map((f, i) => ({ ...f, lens: r.lens, id: `${r.lens}-${i + 1}` })));
+  const advisories: Advisory[] = [...all.filter((f) => !SEVERE.has(f.severity) || f.cause === "pre_existing"), ...unprovenAdvisories(records)];
   const unknown = all.filter((f) => SEVERE.has(f.severity) && f.cause === "unknown");
   const introduced = all.filter((f) => SEVERE.has(f.severity) && f.cause === "introduced");
 
@@ -347,7 +455,8 @@ async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id
       const nonce = randomUUID();
       await store.setPendingReview({ ...p, stage: "challenge", challenge: inferential, challengeNonce: nonce });
       return {
-        ...base,
+        identity: p.identity,
+        lenses: p.lenses,
         outcome: "review_pending",
         stage: "challenge",
         tasks: [{ agent: "check-challenger", nonce, changeFile: join(store.worktreeDir, CHANGE_FILE), findings: brief(inferential), schema: jsonSchema(challengeSchema) }],
@@ -377,7 +486,17 @@ async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id
   }
   if (blockers.length) {
     const budget = correctionBudget(p.changedLines);
-    const open: OpenCorrection = { identity: p.identity, candidateTree: p.candidateTree, options: p.options, lenses: p.lenses, blockers, advisories, budget };
+    const open: OpenCorrection = {
+      identity: p.identity,
+      candidateTree: p.candidateTree,
+      options: p.options,
+      lenses: p.lenses,
+      blockers,
+      advisories,
+      budget,
+      reason: p.reason,
+      ...(records ? { criteria: records } : {}),
+    };
     await store.setOpenCorrection(open);
     await clearPending(store);
     return {
@@ -389,9 +508,115 @@ async function decide(store: CheckStore, p: PendingReview, verdicts?: Array<{ id
       message: `Fix only these blockers, changing at most ${budget} lines, then run: factory check confirm`,
     };
   }
-  await store.seal({ identity: p.identity, lenses: p.lenses, outcome: "approved", advisories });
+  const receiptError = await sealWithReceipt(store, {
+    identity: p.identity,
+    baseTree: p.baseTree ?? "",
+    candidateTree: p.candidateTree,
+    lenses: p.lenses,
+    reason: p.reason,
+    ...(records ? { criteria: records } : {}),
+    blockers: [],
+    advisories,
+  });
   await clearPending(store);
-  return { ...base, outcome: "approved", blockers: [], advisories, message: "Approved and sealed. Advisories are follow-ups, never a reason to review this change again." };
+  const message = receiptError
+    ? `Approved and sealed, but the receipt could not be written: ${receiptError}. Advisories are follow-ups, never a reason to review this change again.`
+    : "Approved and sealed. Advisories are follow-ups, never a reason to review this change again.";
+  return { ...base, outcome: "approved", blockers: [], advisories, message };
+}
+
+/** Each criterion of the review with every lens's verdict and reason; undefined when the review has no criteria. */
+function criterionRecords(p: PendingReview, results: LensResult[]): CriterionRecord[] | undefined {
+  return p.criteria?.map((c) => ({
+    ...c,
+    verdicts: Object.fromEntries(
+      results.flatMap((r) => r.criteria?.filter((v) => v.id === c.id).map((v) => [r.lens, { verdict: v.verdict, reason: v.reason }]) ?? []),
+    ),
+  }));
+}
+
+const mapVerdicts = <T>(c: CriterionRecord, fn: (v: { verdict: Verdict; reason: string }) => T): Partial<Record<LensName, T>> =>
+  Object.fromEntries(Object.entries(c.verdicts).map(([lens, v]) => [lens, fn(v!)]));
+
+/**
+ * A criterion one lens judged not met is a deterministic, introduced blocker of that lens, whatever the other lenses
+ * said: with mixed verdicts across lenses, a single not_met blocks. Being deterministic, it skips the challenger.
+ */
+function unmetFindings(p: PendingReview, r: LensResult): Finding[] {
+  return (r.criteria ?? [])
+    .filter((v) => v.verdict === "not_met")
+    .map((v) => ({
+      location: `criterion ${v.id}`,
+      severity: "blocker" as const,
+      claim: `Criterion ${v.id} not met: ${v.reason}`,
+      evidence: "deterministic" as const,
+      cause: "introduced" as const,
+      proof: [p.criteria?.find((c) => c.id === v.id)?.text ?? v.id, v.reason],
+    }));
+}
+
+/** A criterion that every lens left unproven is reported as an advisory; one met or not_met verdict settles it instead. */
+function unprovenAdvisories(records: CriterionRecord[] | undefined): Advisory[] {
+  return (records ?? []).flatMap((c) => {
+    const answers = Object.entries(c.verdicts);
+    if (!answers.length || answers.some(([, v]) => v!.verdict !== "unproven")) return [];
+    return [
+      {
+        id: `criterion-${c.id}`,
+        lens: answers[0]![0] as LensName,
+        location: `criterion ${c.id}`,
+        severity: "warning" as const,
+        claim: `Criterion ${c.id} unproven: ${answers.map(([lens, v]) => `${lens}: ${v!.reason}`).join("; ")}`,
+        evidence: "inferential" as const,
+        cause: "unknown" as const,
+        proof: [c.text, ...answers.map(([lens, v]) => `${lens}: ${v!.reason}`)],
+      },
+    ];
+  });
+}
+
+/**
+ * Seals the change, then writes its receipt. The seal comes first and stands on its own: a receipt that cannot be
+ * written never undoes it, and the error is returned for the outcome's message instead of being thrown.
+ */
+async function sealWithReceipt(store: CheckStore, r: Omit<Receipt, "outcome" | "sealedAt">): Promise<string | undefined> {
+  const sealedAt = new Date().toISOString();
+  await store.seal({
+    identity: r.identity,
+    lenses: r.lenses,
+    outcome: "approved",
+    advisories: r.advisories,
+    ...(r.corrects ? { corrects: r.corrects } : {}),
+    sealedAt,
+  });
+  const receipt: Receipt = { ...r, outcome: "approved", sealedAt };
+  try {
+    await store.writeReceipt(receipt);
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+}
+
+/** The receipt of one sealed change, by its identity or a unique prefix; without one, of the latest seal that has one. */
+export async function findReceipt(store: CheckStore, id?: string): Promise<Receipt> {
+  if (id === undefined) {
+    // Seals are appended, so the last one with a receipt is the latest; gate seals and older seals have none.
+    for (const seal of (await store.seals()).reverse()) {
+      const receipt = await store.receipt<Receipt>(seal.identity);
+      if (receipt) return receipt;
+    }
+    throw new Error("No change has a receipt yet.");
+  }
+  if (!/^[0-9a-f]+$/i.test(id)) throw new Error("A receipt id is the change identity or a prefix of it (hexadecimal).");
+  const matches = (await store.receiptIds()).filter((r) => r.startsWith(id.toLowerCase()));
+  if (matches.length > 1) throw new Error(`${id} matches ${matches.length} receipts; give more characters of the identity.`);
+  const receipt = matches.length ? await store.receipt<Receipt>(matches[0]!) : undefined;
+  if (!receipt) {
+    if (await store.isSealed(id)) throw new Error(`${id} is sealed but has no receipt: it was sealed before receipts existed, or its receipt could not be written.`);
+    throw new Error(`No receipt for ${id}.`);
+  }
+  return receipt;
 }
 
 /** Checks the one allowed correction: deterministic limits here, then a confirmer task for the blockers. */
@@ -448,9 +673,20 @@ async function captureConfirm(cwd: string, text: string, store: CheckStore): Pro
     if (corrected.identity !== open.confirming) throw new Error(MOVED_CONFIRM);
     const base = { identity: corrected.identity, lenses: open.lenses, corrects: open.identity, advisories: open.advisories };
     const failing = open.blockers.filter((b) => verdict.results.find((r) => r.id === b.id)?.outcome !== "fixed");
+    let receiptError: string | undefined;
     if (!failing.length && verdict.onTopic) {
       // Seal first and use up the correction last, so a failed seal keeps the correction for another capture.
-      await store.seal({ identity: corrected.identity, lenses: open.lenses, outcome: "approved", advisories: open.advisories, corrects: open.identity });
+      receiptError = await sealWithReceipt(store, {
+        identity: corrected.identity,
+        baseTree: corrected.baseTree,
+        candidateTree: corrected.candidateTree,
+        lenses: open.lenses,
+        reason: open.reason ?? "",
+        ...(open.criteria ? { criteria: open.criteria } : {}),
+        blockers: open.blockers,
+        advisories: open.advisories,
+        corrects: open.identity,
+      });
     }
     await store.setOpenCorrection(undefined);
     await store.removeFiles(CONFIRM_CHANGE_FILE, CORRECTION_FILE);
@@ -464,6 +700,9 @@ async function captureConfirm(cwd: string, text: string, store: CheckStore): Pro
           : `The correction touched unrelated paths: ${verdict.offTopicPaths.join(", ")}.`,
       };
     }
-    return { ...base, outcome: "approved" as const, blockers: [], message: "Every blocker is fixed; the corrected change is sealed." };
+    const message = receiptError
+      ? `Every blocker is fixed; the corrected change is sealed, but the receipt could not be written: ${receiptError}.`
+      : "Every blocker is fixed; the corrected change is sealed.";
+    return { ...base, outcome: "approved" as const, blockers: [], message };
   });
 }

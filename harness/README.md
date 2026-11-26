@@ -109,7 +109,9 @@ Subagent models can be set per agent in `~/.ai-factory/harness.json`:
 Checkpoint reviews and the commit gate call no AI from the factory, so a `checkpoint` entry is no longer read.
 `factory check review` prints one task per lens, your agent runs its `check-*` subagents (set their models under
 `agents`, like any other subagent), and `factory check capture` validates each JSON result before the outcome is
-decided. The commit gate works the same way: `factory gate review` prints a `check-gate` task for the staged change,
+decided. `factory check review --criteria <file>` adds acceptance criteria (one per line, at most 12 and 4 KB) that
+every reviewer answers one by one; an unmet one blocks approval. Each Checkpoint seal (an approved review or correction; gate seals have none) keeps a receipt in the repository's
+`factory-check/receipts/` folder, shown by `factory check receipt [<identity or prefix>] [--json]`. The commit gate works the same way: `factory gate review` prints a `check-gate` task for the staged change,
 and `factory gate capture` validates its result and seals a passed change. The pre-commit hook only checks that seal;
 without one it blocks the commit, unless `.factory/gate.json` sets `"strict": false`, which only warns. The subagents
 read only the change file the task names, never the live worktree.

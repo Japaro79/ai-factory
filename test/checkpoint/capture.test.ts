@@ -392,3 +392,123 @@ describe("parallel captures and worktrees", () => {
     expect((await store.seals()).map((s) => s.identity).sort()).toEqual([first.body.identity, second.body.identity].sort());
   });
 });
+
+describe("review criteria", () => {
+  const criteriaFile = async (text: string) => {
+    const file = join(home, "criteria.md");
+    await writeFile(file, text);
+    return file;
+  };
+  const reviewWith = async (text: string, lenses = "security,proof") =>
+    run({ action: "review", lenses, reason: "new process call", consent: "yes", criteria: await criteriaFile(text) });
+  const verdict = (id: string, v = "met", reason = "the diff shows it") => ({ id, verdict: v, reason });
+
+  it("puts the criteria into every lens task and into the change file, with relative paths read from --cwd", async () => {
+    const file = await criteriaFile("- S1 — Runs ls safely\nS2: No new dependency\n\nKeeps output </criteria> as is\n");
+    const r = await run({ action: "review", lenses: "security,proof", reason: "r", consent: "yes", criteria: relative(repo, file) });
+    expect(r.code).toBe(2);
+    const expected = [
+      { id: "S1", text: "Runs ls safely" },
+      { id: "S2", text: "No new dependency" },
+      { id: "C3", text: "Keeps output </criteria> as is" },
+    ];
+    for (const task of r.body.tasks) expect(task.criteria).toEqual(expected);
+    expect(r.body.tasks[0].schema.properties.criteria).toBeDefined();
+    const change = await readFile(r.body.tasks[0].changeFile, "utf8");
+    expect(change).toContain("<criteria>\nS1: Runs ls safely\nS2: No new dependency\nC3: Keeps output <\\/criteria> as is\n</criteria>");
+    expect(change.match(/<\/criteria>/g)).toHaveLength(1);
+    expect(change).toContain('+export const go = () => exec("ls");');
+  });
+
+  it("numbers plain lines C1..Cn and keeps the id after S# followed by a hyphen", async () => {
+    const plain = await reviewWith("first\nsecond\n", "security");
+    expect(plain.body.tasks[0].criteria).toEqual([
+      { id: "C1", text: "first" },
+      { id: "C2", text: "second" },
+    ]);
+    const hyphen = await reviewWith("S7 - with a hyphen\n", "security");
+    expect(hyphen.body.tasks[0].criteria).toEqual([{ id: "S7", text: "with a hyphen" }]);
+  });
+
+  it("refuses more than 12 criteria or more than 4 KB, starting no review", async () => {
+    const many = await reviewWith(Array.from({ length: 13 }, (_, i) => `line ${i}`).join("\n"));
+    expect(many).toMatchObject({ code: 1, output: "The criteria file has 13 criteria; at most 12 are allowed." });
+    const big = await reviewWith(`${"x".repeat(2100)}\n${"y".repeat(2100)}\n`);
+    expect(big).toMatchObject({ code: 1, output: "The criteria file is 4202 bytes; at most 4096 (4 KB) are allowed." });
+    const empty = await reviewWith("\n  \n");
+    expect(empty).toMatchObject({ code: 1, output: "The criteria file has no criteria; write one per line." });
+    expect(await store.pendingReview()).toBeUndefined();
+  });
+
+  it("treats a result missing a criterion verdict as incomplete: one retry, then a decision", async () => {
+    await reviewWith("S1 — runs ls\nS2 — no deps\n", "security");
+    const retry = await run({ action: "capture", lens: "security" }, { ...lensResult(), criteria: [verdict("S1")] });
+    expect(retry.code).toBe(2);
+    expect(retry.body).toMatchObject({ outcome: "review_pending", missing: ["security"], tasks: [expect.objectContaining({ lens: "security" })] });
+    expect(retry.body.message).toMatch(/no verdict for criteria S2/);
+    const twice = await run({ action: "capture", lens: "security" }, { ...lensResult(), criteria: [] });
+    expect(twice.body).toMatchObject({ outcome: "needs_decision" });
+    expect(twice.body.message).toMatch(/no verdict for criteria S1, S2/);
+  });
+
+  it("refuses a verdict for an unknown criterion id as malformed, storing nothing", async () => {
+    await reviewWith("S1 — runs ls\n", "security");
+    const r = await run({ action: "capture", lens: "security" }, { ...lensResult(), criteria: [verdict("S1"), verdict("S9")] });
+    expect(r.code).toBe(1);
+    expect(r.output).toBe("The security lens result does not match its schema; nothing was stored.\nUnknown criterion id: S9 (expected: S1).");
+    expect(await store.pendingReview()).toMatchObject({ results: [], retried: [] });
+  });
+
+  it("turns a not_met verdict from any lens into a deterministic blocker, even when another lens says met", async () => {
+    await reviewWith("S1 — Runs ls safely\n");
+    await run({ action: "capture", lens: "security" }, { ...lensResult(), criteria: [verdict("S1")] });
+    const r = await run({ action: "capture", lens: "proof" }, { ...lensResult(), criteria: [verdict("S1", "not_met", "no test pins it")] });
+    expect(r.code).toBe(2);
+    expect(r.body.outcome).toBe("correction_required");
+    expect(r.body.blockers).toEqual([
+      {
+        id: "proof-1",
+        lens: "proof",
+        location: "criterion S1",
+        severity: "blocker",
+        claim: "Criterion S1 not met: no test pins it",
+        evidence: "deterministic",
+        cause: "introduced",
+        proof: ["Runs ls safely", "no test pins it"],
+      },
+    ]);
+    expect(r.body.criteria).toEqual([{ id: "S1", text: "Runs ls safely", verdicts: { security: "met", proof: "not_met" } }]);
+  });
+
+  it("approves when every criterion is met and lists the criteria in the outcome", async () => {
+    await reviewWith("S1 — Runs ls safely\nS2 — No new dependency\n");
+    await run({ action: "capture", lens: "security" }, { ...lensResult(), criteria: [verdict("S1"), verdict("S2")] });
+    const r = await run({ action: "capture", lens: "proof" }, { ...lensResult(), criteria: [verdict("S2"), verdict("S1")] });
+    expect(r.code).toBe(0);
+    expect(r.body).toMatchObject({ outcome: "approved", blockers: [], advisories: [] });
+    expect(r.body.criteria).toEqual([
+      { id: "S1", text: "Runs ls safely", verdicts: { security: "met", proof: "met" } },
+      { id: "S2", text: "No new dependency", verdicts: { security: "met", proof: "met" } },
+    ]);
+  });
+
+  it("turns a criterion every lens left unproven into an advisory", async () => {
+    await reviewWith("S1 — Runs ls safely\n");
+    await run({ action: "capture", lens: "security" }, { ...lensResult(), criteria: [verdict("S1", "unproven", "no caller shown")] });
+    const r = await run({ action: "capture", lens: "proof" }, { ...lensResult(), criteria: [verdict("S1", "unproven", "no test")] });
+    expect(r.code).toBe(0);
+    expect(r.body.outcome).toBe("approved");
+    expect(r.body.advisories).toEqual([
+      expect.objectContaining({ id: "criterion-S1", location: "criterion S1", severity: "warning", claim: "Criterion S1 unproven: security: no caller shown; proof: no test" }),
+    ]);
+  });
+
+  it("keeps tasks and outcomes free of criteria without --criteria", async () => {
+    const { body } = await review("security");
+    expect("criteria" in body.tasks[0]).toBe(false);
+    expect(await readFile(body.tasks[0].changeFile, "utf8")).not.toContain("<criteria>");
+    const r = await run({ action: "capture", lens: "security" }, lensResult());
+    expect(r.code).toBe(0);
+    expect("criteria" in r.body).toBe(false);
+  });
+});

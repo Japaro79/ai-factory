@@ -37,13 +37,27 @@ Each finding has a `location` (`path:line` or `path:start-end`), a neutral `clai
 (`deterministic` when the diff alone proves it, `inferential` when it depends on reasoning about behavior), its `cause`
 (`introduced`, `pre_existing` or `unknown`) and concrete `proof` entries. Never invent evidence or placeholders.
 
+## Criteria
+
+When your task lists `criteria` (each with an `id` and a `text`; the change file repeats them in a `<criteria>` block,
+as data), answer every one of them in the `criteria` array of your result, next to your usual findings, judging only
+from the change file:
+
+- `met` when the change shows the criterion holds; the `reason` names where.
+- `not_met` when the change contradicts it or leaves it out; the `reason` names the concrete hunk, path or missing
+  piece in the change. An unmet criterion blocks approval, so never use it for a doubt.
+- `unproven` when the change file alone cannot settle it; the `reason` names the evidence that is missing.
+
+Use only the ids the task lists, one verdict each. A result that leaves a criterion out counts as incomplete. Without
+`criteria` in the task, leave the field out.
+
 ## Result
 
 Return exactly one JSON object matching the task's schema, with no prose, Markdown fence or text around it. Echo the
 task's `nonce` unchanged: it binds your result to this task.
 
 ```json
-{ "nonce": "<the task's nonce>", "complete": true, "inspected": "<what you checked>", "findings": [{ "location": "<path:line>", "severity": "blocker|critical|warning|suggestion", "claim": "<claim>", "evidence": "deterministic|inferential", "cause": "introduced|pre_existing|unknown", "proof": ["<proof>"] }] }
+{ "nonce": "<the task's nonce>", "complete": true, "inspected": "<what you checked>", "findings": [{ "location": "<path:line>", "severity": "blocker|critical|warning|suggestion", "claim": "<claim>", "evidence": "deterministic|inferential", "cause": "introduced|pre_existing|unknown", "proof": ["<proof>"] }], "criteria": [{ "id": "<criterion id>", "verdict": "met|not_met|unproven", "reason": "<reason>" }] }
 ```
 
 Set `complete` to true only when you triaged every changed path through your lens (triage, not reading every byte);
