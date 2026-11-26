@@ -244,7 +244,9 @@ describe("factory memory from the command line", () => {
   /** The CLI with a temporary home: the stores it opens live under `dir/home`, never the real ones. */
   function cli(args: string[]) {
     const home = join(dir, "home");
-    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home };
+    // Node 22 prints an ExperimentalWarning for node:sqlite on stderr; the assertions below check our own stderr only.
+    const nodeOptions = [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"].filter(Boolean).join(" ");
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home, NODE_OPTIONS: nodeOptions };
     const seen = spawnSync(process.execPath, ["-e", "process.stdout.write(require('node:os').homedir())"], { env, encoding: "utf8" });
     expect(seen.stdout).toBe(home);
     return spawnSync(process.execPath, [TSX_CLI, CLI, ...args], { env, encoding: "utf8" });
