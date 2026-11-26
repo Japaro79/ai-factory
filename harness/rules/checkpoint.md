@@ -73,7 +73,7 @@ other blocker. Keep the file outside the repository, like result files.
 Exit codes: 0 means approved, 2 means read `outcome` (a pending task or a decision), 1 means an error or a refused
 result.
 
-Every seal keeps a receipt: `factory check receipt [<identity or prefix>] [--json]` shows what it covered (the lenses,
+Every Checkpoint seal (an approved review or correction; not the gate) keeps a receipt: `factory check receipt [<identity or prefix>] [--json]` shows what it covered (the lenses,
 each criterion's verdicts, the blockers, the advisories and the outcome); without an id, the latest one.
 
 A seal is per exact content: any later change is a new change. `assess` reports `already_reviewed` for a sealed one;
