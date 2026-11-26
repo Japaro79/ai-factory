@@ -275,26 +275,21 @@ async function main(): Promise<number> {
       console.log("No projects registered. Register one with: factory add --repo <path>");
       return 0;
     }
-    // Every configured non-Claude provider is checked for every project before the first one starts.
-    const { precheckProviders } = await import("./adapters/agentProvider.ts");
-    const configs: Awaited<ReturnType<typeof loadConfig>>[] = [];
-    for (const p of projects) {
-      const config = await loadConfig(p.configPath);
-      const problem = await precheckProviders(config);
-      if (problem) {
-        console.error(`${p.name}: ${problem}`);
-        return 1;
-      }
-      configs.push(config);
-    }
     return withPollLock(async () => {
       let code = 0;
-      for (const [i, p] of projects.entries()) {
+      for (const p of projects) {
         console.log(`— ${p.name}`);
-        const config = configs[i]!;
-        const { wire } = await import("./wire.ts");
-        const { deps, settings } = wire(config, { dryRun: values["dry-run"] === true, runsDir: runsDirFor(p.configPath), projectName: p.name });
-        code = Math.max(code, await pollOnce(deps, settings, config.intake.label));
+        // Each project loads in turn, as before: a broken config stops at that project, after the ones before it ran.
+        const config = await loadConfig(p.configPath);
+        const { wireForRun } = await import("./wire.ts");
+        // A project whose configured non-Claude provider is missing or logged out is skipped; the others still run.
+        const wired = await wireForRun(config, { dryRun: values["dry-run"] === true, runsDir: runsDirFor(p.configPath), projectName: p.name });
+        if ("error" in wired) {
+          console.error(`${p.name}: ${wired.error}`);
+          code = Math.max(code, 1);
+          continue;
+        }
+        code = Math.max(code, await pollOnce(wired.deps, wired.settings, config.intake.label));
       }
       return code;
     });
