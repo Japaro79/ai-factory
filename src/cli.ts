@@ -119,8 +119,8 @@ async function main(): Promise<number> {
     // Loaded here only: node:sqlite stays out of every other command, and if it fails the lessons are still served.
     let notes: MemoryServerOptions = {};
     try {
-      const { projectNameFor, SqliteNotes } = await import("./adapters/notes.ts");
-      notes = { notes: new SqliteNotes(), project: projectNameFor(process.cwd()) };
+      const { SqliteNotes } = await import("./adapters/notes.ts");
+      notes = { notes: new SqliteNotes(), cwd: process.cwd() };
     } catch (error) {
       console.error(`ai-factory-memory: session notes unavailable (${error instanceof Error ? error.message : error}); serving lessons only.`);
     }

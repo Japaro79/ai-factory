@@ -12,7 +12,7 @@ are our own rewrite of its ideas, with our own names and the factory's own tools
 | Path | What it is |
 |------|------------|
 | `rules/voice.md` | How to answer: short, evidence first, one question at a time, skills first |
-| `rules/memory.md` | When to load, save and search the `ai-factory-memory` notes and lessons |
+| `rules/memory.md` | When to load, save and search the `ai-factory-memory` notes and lessons (a project is its git `origin` remote as `host/owner/repo`, or the folder name without one; old folder-name notes move to it once, after a backup; see the main README's session memory section) |
 | `rules/*.md` | Always loaded into every session, so they stay within a word budget (checked in `test/harness/rules.test.ts`); situational procedures live in skills the rules point to |
 | `rules/conductor.md` | How the main session works: inline first, when to delegate, faithful prompts, finding skills |
 | `rules/build-flow.md` | Build Flow: authorize, explore, settle doubts, size, track, build, close; the delegation triggers; test first |

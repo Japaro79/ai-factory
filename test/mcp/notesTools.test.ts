@@ -1,6 +1,7 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -21,10 +22,11 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-/** A client of a server running "inside" the given project, over the real MCP protocol. */
-async function connect(project = "shop") {
+/** A client of a server running "inside" the given project (or folder, with `{ cwd }`), over the real MCP protocol. */
+async function connect(project: string | { cwd: string } = "shop") {
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
-  await createMemoryServer(new JsonlMemory(join(dir, "lessons.jsonl")), { notes, project }).connect(serverSide);
+  const where = typeof project === "string" ? { project } : project;
+  await createMemoryServer(new JsonlMemory(join(dir, "lessons.jsonl")), { notes, ...where }).connect(serverSide);
   const client = new Client({ name: "test", version: "0.0.0" });
   await client.connect(clientSide);
   return client;
@@ -119,5 +121,96 @@ describe("ai-factory-memory project notes", () => {
     expect((await client.callTool({ name: "memory_save", arguments: { title: "x".repeat(200), content: "c", type: "other" } })).isError).toBe(true);
     expect((await client.callTool({ name: "memory_save", arguments: { title: "Sneaky", content: "c", type: "session" } })).isError).toBe(true);
     expect(text(await client.callTool({ name: "memory_get", arguments: { id: 999 } }))).toMatch(/no note #999/i);
+  });
+});
+
+/** A git repository in `dir/<name>`, with `origin` set when a URL is given. */
+async function repo(name: string, origin?: string): Promise<string> {
+  const path = join(dir, name);
+  await mkdir(path, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: path });
+  if (origin) execFileSync("git", ["remote", "add", "origin", origin], { cwd: path });
+  return path;
+}
+
+describe("ai-factory-memory project id", () => {
+  const ID = "github.com/acme/shop";
+
+  it("lets two clones in differently named folders read and write the same notes", async () => {
+    const first = await connect({ cwd: await repo("shop", "https://github.com/Acme/Shop.git") });
+    const second = await connect({ cwd: await repo("shop-2", "git@github.com:acme/shop.git") });
+    expect(text(await first.callTool({ name: "memory_save", arguments: { title: "Shared decision", content: "both clones see it", type: "decision" } }))).toMatch(
+      `in project "${ID}"`,
+    );
+    const found = text(await second.callTool({ name: "memory_search", arguments: { query: "clones" } }));
+    expect(found).toContain(`Project "${ID}".`);
+    expect(found).toContain("Shared decision");
+  });
+
+  it("reports the project id it used in every note tool", async () => {
+    const client = await connect({ cwd: await repo("shop", "https://github.com/acme/shop") });
+    expect(text(await client.callTool({ name: "memory_save", arguments: { title: "Picked Vitest", content: "ESM", type: "decision" } }))).toContain(`project "${ID}"`);
+    expect(text(await client.callTool({ name: "memory_search", arguments: { query: "vitest" } }))).toContain(`Project "${ID}".`);
+    expect(text(await client.callTool({ name: "memory_search", arguments: { query: "nothing-here" } }))).toContain(`in project "${ID}"`);
+    expect(text(await client.callTool({ name: "memory_search", arguments: { query: "vitest", all_projects: true } }))).toContain(`current project "${ID}"`);
+    expect(text(await client.callTool({ name: "memory_search", arguments: { query: "nothing-here", all_projects: true } }))).toContain(`current project "${ID}"`);
+    expect(text(await client.callTool({ name: "session_summary", arguments: { summary: "Did the work, nothing pending." } }))).toContain(`project "${ID}"`);
+    expect(text(await client.callTool({ name: "memory_context", arguments: {} }))).toContain(`Project "${ID}".`);
+    expect(text(await client.callTool({ name: "memory_get", arguments: { id: 1 } }))).toContain(`project ${ID}`);
+  });
+
+  it("keeps working under the folder name when there is no remote", async () => {
+    const client = await connect({ cwd: await repo("Loose-Repo") });
+    expect(text(await client.callTool({ name: "memory_save", arguments: { title: "Local note", content: "no remote here", type: "other" } }))).toContain(
+      'in project "loose-repo"',
+    );
+    const context = text(await client.callTool({ name: "memory_context", arguments: {} }));
+    expect(context).toContain('Project "loose-repo".');
+    expect(context).toContain("Local note");
+    expect(context).not.toMatch(/migrated/i);
+  });
+
+  it("migrates the folder name's notes once and reports it in the first context only", async () => {
+    notes.save({ project: "my-shop", type: "decision", title: "Old clone decision", content: "kept across the move" });
+    const cwd = await repo("My-Shop", "git@github.com:acme/shop.git");
+    const client = await connect({ cwd });
+
+    const first = text(await client.callTool({ name: "memory_context", arguments: {} }));
+    expect(first).toMatch(new RegExp(`Migrated 1 note\\(s\\) from "my-shop" to "${ID}" \\(backup: .*notes\\.db\\.bak-[^)]+\\)`));
+    expect(first).toContain(`Project "${ID}".`);
+    expect(first).toContain("Old clone decision");
+    expect(first.match(/Migrated/g)).toHaveLength(1);
+    expect(first.trim().endsWith("</notes>")).toBe(true);
+
+    expect(text(await client.callTool({ name: "memory_context", arguments: {} }))).not.toMatch(/Migrated/);
+    // A later server process on the same store finds nothing left to migrate.
+    expect(text(await (await connect({ cwd })).callTool({ name: "memory_context", arguments: {} }))).not.toMatch(/Migrated/);
+  });
+
+  it("reports topic conflicts in the migration line", async () => {
+    notes.save({ project: "my-shop", type: "config", title: "Old CI", content: "node 20", topic: "ci/node" });
+    await new Promise((r) => setTimeout(r, 5));
+    notes.save({ project: ID, type: "config", title: "New CI", content: "node 25", topic: "ci/node" });
+    const client = await connect({ cwd: await repo("My-Shop", "git@github.com:acme/shop.git") });
+    const context = text(await client.callTool({ name: "memory_context", arguments: {} }));
+    expect(context).toMatch(/Migrated 1 note\(s\)/);
+    expect(context).toMatch(/topic "ci\/node": kept #2, the older #1 is now "ci\/node#migrated"/);
+  });
+
+  it("still finds migrated notes when a tool names the old folder name", async () => {
+    notes.save({ project: "my-shop", type: "decision", title: "Old clone decision", content: "kept across the move" });
+    const client = await connect({ cwd: await repo("My-Shop", "git@github.com:acme/shop.git") });
+    expect(text(await client.callTool({ name: "memory_save", arguments: { title: "Saved by old name", content: "goes to the id", type: "other", project: "my-shop" } }))).toContain(
+      `in project "${ID}"`,
+    );
+    const found = text(await client.callTool({ name: "memory_search", arguments: { query: "clone decision", project: "my-shop" } }));
+    expect(found).toContain(`Project "${ID}".`);
+    expect(found).toContain("Old clone decision");
+    const context = text(await client.callTool({ name: "memory_context", arguments: { project: "my-shop" } }));
+    expect(context).toContain(`Project "${ID}".`);
+    expect(context).toContain("Saved by old name");
+    expect(text(await client.callTool({ name: "session_summary", arguments: { summary: "Summary under the old name.", project: "my-shop" } }))).toContain(
+      `in project "${ID}"`,
+    );
   });
 });

@@ -2,14 +2,20 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { Memory } from "../application/ports.ts";
 import { clipLessonField, clipNoteBody, fenceLessons, fenceNotes, MAX_FENCED_LESSONS } from "../adapters/lessonText.ts";
-import type { SqliteNotes } from "../adapters/notes.ts";
+import type { MigrationResult, SqliteNotes } from "../adapters/notes.ts";
+import { projectIdFor } from "../adapters/projectId.ts";
 import { NOTE_TYPES, type Note, type NoteType } from "../domain/note.ts";
 
 export interface MemoryServerOptions {
   /** Per-project notes; without it the server only offers the shared lessons. */
   notes?: SqliteNotes;
-  /** Project the session runs in, used when a tool call names none. */
+  /** Project the session runs in, used when a tool call names none; wins over `cwd`. */
   project?: string;
+  /**
+   * Folder the session runs in: its project is identified by the git `origin` remote (the folder name without one), and
+   * notes stored under the folder name before are migrated to that id once.
+   */
+  cwd?: string;
 }
 
 /** Provenance of every lesson saved through MCP; factory-learned lessons carry "project/task" instead. */
@@ -68,7 +74,10 @@ export function createMemoryServer(memory: Memory, options: MemoryServerOptions 
     },
   );
 
-  if (options.notes) registerNoteTools(server, options.notes, options.project ?? "default");
+  if (options.notes) {
+    const { project, notice } = currentProject(options.notes, options);
+    registerNoteTools(server, options.notes, project, notice);
+  }
   return server;
 }
 
@@ -78,7 +87,7 @@ const projectArg = z
   .min(1)
   .max(80)
   .optional()
-  .describe("Another project's name; defaults to the project of the folder this session runs in.");
+  .describe("Another project's id (host/owner/repo) or old folder name; defaults to the project of the folder this session runs in.");
 
 const day = (iso: string) => iso.slice(0, 10);
 const noteLine = (n: Note, contentChars: number) =>
@@ -86,8 +95,34 @@ const noteLine = (n: Note, contentChars: number) =>
   `${clipLessonField(n.title, 160)}: ${clipLessonField(n.content, contentChars)}`;
 const reply = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
 
+/** Lines that tell the agent what the migration of this process did, conflicts and the shared-name limit included. */
+function migrationNotice(legacy: string, id: string, result: MigrationResult): string[] {
+  if (result.moved === 0) return [];
+  return [
+    `Migrated ${result.moved} note(s) from "${legacy}" to "${id}" (backup: ${result.backup})`,
+    ...result.conflicts.map((c) => `- topic "${c.topic}": kept #${c.kept}, the older #${c.renamed} is now "${c.renamedTo}".`),
+    `Notes saved under "${legacy}" by any repository in a folder of that name came along; check them with memory_search.`,
+  ];
+}
+
+/** The session's project and, when this process moved notes to it, the lines the first memory_context reports. */
+function currentProject(notes: SqliteNotes, options: MemoryServerOptions): { project: string; notice: string[] } {
+  if (options.project !== undefined || options.cwd === undefined) return { project: options.project ?? "default", notice: [] };
+  const { id, legacy } = projectIdFor(options.cwd);
+  try {
+    return { project: id, notice: migrationNotice(legacy, id, notes.migrateLegacy(legacy, id)) };
+  } catch (error) {
+    // Nothing moved (the move is one transaction): keep the old name so no note is split, and retry in the next process.
+    const reason = error instanceof Error ? error.message : String(error);
+    return { project: legacy, notice: [`Could not migrate the notes of "${legacy}" to "${id}" (${reason}); using "${legacy}" for now.`] };
+  }
+}
+
 /** Per-project memory of agent sessions: what Engram used to keep for Claude Code, in the factory's own store. */
-function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject: string): void {
+function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject: string, notice: string[]): void {
+  let pendingNotice = notice;
+  /** An explicit project goes through the migrations, so an old folder-style name still finds its moved notes. */
+  const pick = (project: string | undefined) => (project === undefined ? currentProject : notes.resolveProject(project));
   server.registerTool(
     "memory_save",
     {
@@ -106,7 +141,7 @@ function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject
       },
     },
     async ({ title, content, type, topic, project }) => {
-      const target = project ?? currentProject;
+      const target = pick(project);
       const { id, updated } = notes.save({ project: target, type, title, content, topic });
       return reply(`${updated ? "Updated" : "Saved"} note #${id} in project "${target}"${topic ? ` (topic ${topic})` : ""}.`);
     },
@@ -127,10 +162,12 @@ function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject
       },
     },
     async ({ query, project, all_projects, limit }) => {
-      const scope = all_projects ? undefined : (project ?? currentProject);
+      const scope = all_projects ? undefined : pick(project);
       const found = notes.search({ query, project: scope, limit: limit ?? 5 });
-      if (!found.length) return reply(`No notes found for "${clipLessonField(query, 100)}"${scope ? ` in project "${scope}"` : ""}.`);
-      return reply(fenceNotes(found.map((n) => noteLine(n, 300))).join("\n"));
+      const where = scope !== undefined ? `in project "${scope}"` : `in any project (current project "${currentProject}")`;
+      if (!found.length) return reply(`No notes found for "${clipLessonField(query, 100)}" ${where}.`);
+      const heading = scope !== undefined ? `Project "${scope}".` : `All projects (current project "${currentProject}").`;
+      return reply(fenceNotes([heading, ...found.map((n) => noteLine(n, 300))]).join("\n"));
     },
   );
 
@@ -147,16 +184,19 @@ function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject
       },
     },
     async ({ project, limit }) => {
-      const target = project ?? currentProject;
+      const target = pick(project);
+      // This process's migration is reported once, before the notes and outside their data fence.
+      const migration = pendingNotice;
+      pendingNotice = [];
       const session = notes.latestSession(target);
       const recent = notes.recent({ project: target, limit: limit ?? 8 });
-      if (!session && !recent.length) return reply(`Project "${target}" has no notes yet.`);
+      if (!session && !recent.length) return reply([...migration, `Project "${target}" has no notes yet.`].join("\n"));
       const lines = [
         `Project "${target}".`,
         session ? `Last session summary (#${session.id}, ${day(session.updatedAt)}):\n${clipNoteBody(session.content, 2000)}` : "No session summary yet.",
         ...(recent.length ? ["Recent notes:", ...recent.map((n) => noteLine(n, 200))] : []),
       ];
-      return reply(fenceNotes(lines).join("\n"));
+      return reply([...migration, ...fenceNotes(lines)].join("\n"));
     },
   );
 
@@ -188,7 +228,7 @@ function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject
       },
     },
     async ({ summary, project }) => {
-      const target = project ?? currentProject;
+      const target = pick(project);
       const { id } = notes.save({ project: target, type: "session", title: `Session ${new Date().toISOString().slice(0, 16)}`, content: summary });
       return reply(`Saved session summary #${id} in project "${target}".`);
     },
