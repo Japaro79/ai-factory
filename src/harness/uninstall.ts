@@ -4,13 +4,14 @@ import { dirname, join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { removeAllBlocks } from "./blocks.ts";
 import { HOOK_MARKS, jsonWrite, MEMORY_SERVER, planHarness, TOML_BEGIN, TOML_END, type InstallOptions } from "./install.ts";
-import { ANTIGRAVITY_FILE, ANTIGRAVITY_HEADER, rulesLocation, type AgentId, type Plan, type Write } from "./rules.ts";
+import { ANTIGRAVITY_FILE, ANTIGRAVITY_HEADER, HARNESS_DIR, readAsset, rulesLocation, type AgentId, type Plan, type Write } from "./rules.ts";
+import { MANAGED_STYLES } from "./style.ts";
 
 /**
  * Removing the harness from one agent, as a Plan that applyPlan backs up and applies like any install. Only our content
  * goes: our rule blocks, our Antigravity rule files, the skills, subagents, style and plugin files still identical to
  * what install writes, our hooks, the ai-factory-memory MCP entry, our OpenCode agents, the Codex TOML block and an
- * outputStyle of "Mentor". Permission rules stay (nobody can tell who added them), and so does every file the user
+ * outputStyle of "Mentor" or "Neutral". Permission rules stay (nobody can tell who added them), and so does every file the user
  * changed, listed in `kept`. The same holds for the memory MCP entry and our OpenCode agents: one that differs from what
  * install writes stays and is listed.
  */
@@ -73,7 +74,7 @@ function stripJson(agent: AgentId, fresh: Record<string, any>, file: string, kep
   return (cfg) => {
     switch (agent) {
       case "claude-code":
-        if (cfg.outputStyle === "Mentor") delete cfg.outputStyle;
+        if ((Object.values(MANAGED_STYLES) as unknown[]).includes(cfg.outputStyle)) delete cfg.outputStyle;
         dropHooks(cfg);
         break;
       case "codex":
@@ -131,6 +132,19 @@ export async function planUninstall(agent: AgentId, home: string, options: Insta
         if (current === undefined) continue;
         if (current === w.content) writes.push({ path, content: null });
         else kept.push(path);
+      }
+    }
+    if (agent === "claude-code") {
+      // A style file of ours the current choice no longer installs (left by a switch, or before "none"): it goes only
+      // while it is still identical to what install wrote; any other file there is the user's and stays unlisted.
+      const rendered = new Set(fresh.writes.map((w) => join(home, relative(scratch, w.path))));
+      for (const name of Object.keys(MANAGED_STYLES)) {
+        const path = join(home, ".claude", "output-styles", `${name}.md`);
+        if (rendered.has(path)) continue;
+        const current = await readOrUndefined(path);
+        if (current !== undefined && current === (await readAsset(join(options.harnessDir ?? HARNESS_DIR, "output-styles", `${name}.md`)))) {
+          writes.push({ path, content: null });
+        }
       }
     }
     if ("dir" in rules) {

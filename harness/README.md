@@ -18,7 +18,8 @@ are our own rewrite of its ideas, with our own names and the factory's own tools
 | `rules/build-flow.md` | Build Flow: authorize, explore, settle doubts, size, track, build, close; the delegation triggers; test first |
 | `rules/remote-access.md` | Remote work needs its own explicit permission |
 | `rules/codegraph.md` | Use CodeGraph first for structural questions |
-| `output-styles/mentor.md` | The Mentor output style (folded into the voice block for agents without output styles) |
+| `output-styles/mentor.md` | The Mentor output style, the default (folded into the voice block for agents without output styles) |
+| `output-styles/neutral.md` | The Neutral output style: Mentor's length, evidence and language rules without the persona (`setup install --style neutral`) |
 
 | `rules/checkpoint.md` | When a Checkpoint review or the commit gate applies, and who controls the switch |
 | `rules/agent-basics.md` | Artifact language rule appended to every subagent |
@@ -57,6 +58,7 @@ voice block.
 ```bash
 factory setup install --dry-run          # see what would change
 factory setup install                    # every agent; or --agent claude-code,codex
+factory setup install --style neutral    # response style: mentor (default), neutral or none; stored for sync
 factory setup sync                       # refresh only the agents already installed (after a pull)
 factory setup uninstall [--dry-run]      # remove the harness from the agents that have it; or --agent codex
 factory setup doctor                     # read-only health check; --json for a machine-readable report
@@ -66,11 +68,22 @@ factory setup restore <backup id>        # undo, with the id printed by install,
 `sync` finds the agents that already have the harness by our own markers (an `ai-factory` block in the instruction
 file, or our Antigravity rule files) and never installs into a new one.
 
+`--style` (install only) chooses the response style: `mentor` (the default), `neutral` (the same length, evidence and
+language rules without the persona: no tone, behavior or teaching sections) or `none` (setup leaves the style alone:
+no output style file is written, `outputStyle` is neither set nor removed, and the voice block carries only its base
+rules). Claude Code gets `outputStyle` "Mentor" or "Neutral" and `~/.claude/output-styles/<style>.md`; the other agents
+get the style's body in their voice block. Install stores the choice as `style` in `~/.ai-factory/harness.json`
+(keeping every other key, backed up first), and `install` or `sync` without `--style` use the stored one (mentor when
+none is stored). An unknown value is refused before any write, with the valid values listed, and so is `--style` on
+any other setup subcommand. Switching between mentor and neutral leaves the previous style file behind until
+`uninstall`.
+
 `uninstall` acts on the same installed agents, backs up every file first, and removes only our content: the
 `ai-factory` rule blocks (an instruction file left with nothing else stays as an empty file), and our Antigravity rule
-files, skills, subagents, output style and OpenCode plugin while they are still identical to what install writes,
-the hooks carrying our commands, the `ai-factory-memory` MCP entry, our OpenCode agents, the Codex TOML block between
-`# ai-factory:begin mcp` and `# ai-factory:end mcp`, and `outputStyle` when it is `"Mentor"`. It never removes
+files, skills, subagents, output styles (Mentor and Neutral) and OpenCode plugin while they are still identical to what
+install writes, the hooks carrying our commands, the `ai-factory-memory` MCP entry, our OpenCode agents, the Codex TOML
+block between `# ai-factory:begin mcp` and `# ai-factory:end mcp`, and `outputStyle` when it is `"Mentor"` or
+`"Neutral"`. It never removes
 permission rules (nobody can tell who added them) nor files you modified: those are listed as `kept modified`. Context7
 entries outside the Codex block stay too. A JSON config with comments or trailing commas is refused for that agent.
 For Claude Code it also runs `claude mcp remove --scope user ai-factory-memory` after backing up `~/.claude.json`
@@ -93,7 +106,8 @@ factory processes and run `npm ci` and `factory setup sync` in the checkout by h
 
 Install also copies the skills and subagents, registers the `ai-factory-memory` and Context7 MCP servers (Codex,
 OpenCode, Antigravity), adds the session hooks (Checkpoint reminder, skill index refresh, local usage log), merges the
-permission guard without overriding your own rules, and selects the Mentor output style in Claude Code.
+permission guard without overriding your own rules, and selects the chosen output style in Claude Code (Mentor unless
+`--style` says otherwise).
 
 In Claude Code, `install` and `sync` register `ai-factory-memory` at user scope with `claude mcp add --scope user` when
 it is missing and `claude` is on PATH, after backing up `~/.claude.json` (undo with `factory setup restore <id>`).
