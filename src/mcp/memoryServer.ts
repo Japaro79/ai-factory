@@ -94,6 +94,7 @@ const noteLine = (n: Note, contentChars: number) =>
   `- #${n.id} [${n.type}] ${clipLessonField(n.project, 80)} · ${day(n.updatedAt)}${n.topic ? ` · topic: ${clipLessonField(n.topic, 120)}` : ""} — ` +
   `${clipLessonField(n.title, 160)}: ${clipLessonField(n.content, contentChars)}`;
 const reply = (body: string) => ({ content: [{ type: "text" as const, text: body }] });
+const failure = (body: string) => ({ ...reply(body), isError: true });
 
 /** Lines that tell the agent what the migration of this process did, conflicts and the shared-name limit included. */
 function migrationNotice(legacy: string, id: string, result: MigrationResult): string[] {
@@ -212,6 +213,52 @@ function registerNoteTools(server: McpServer, notes: SqliteNotes, currentProject
       if (!note) return reply(`There is no note #${id}.`);
       const header = `#${note.id} [${note.type}] project ${clipLessonField(note.project, 80)} · created ${day(note.createdAt)} · updated ${day(note.updatedAt)}`;
       return reply(fenceNotes([header, `${note.topic ? `topic: ${clipLessonField(note.topic, 120)}\n` : ""}${clipLessonField(note.title, 160)}`, clipNoteBody(note.content, 4000)]).join("\n"));
+    },
+  );
+
+  server.registerTool(
+    "memory_delete",
+    {
+      title: "Delete a project note",
+      description: "Delete one note by id, from any project, when it is wrong or outdated. It no longer appears in search, context or get.",
+      inputSchema: { id: z.number().int().min(1).describe("Note id, the number after #.") },
+    },
+    async ({ id }) => {
+      const note = notes.delete(id);
+      if (!note) return failure(`There is no note #${id}.`);
+      return reply(`Deleted note #${id} "${clipLessonField(note.title, 160)}" from project "${clipLessonField(note.project, 80)}".`);
+    },
+  );
+
+  server.registerTool(
+    "memory_update",
+    {
+      title: "Edit a project note",
+      description:
+        "Correct one note by id, keeping its id: only the fields you give change. An empty topic clears it; a topic " +
+        "another note of the same project already uses is refused.",
+      inputSchema: {
+        id: z.number().int().min(1).describe("Note id, the number after #."),
+        title: z.string().min(3).max(160).optional().describe("New title."),
+        content: z.string().min(2).max(4000).optional().describe("New content."),
+        type: z.enum(SAVABLE_TYPES).optional().describe("New kind of note."),
+        topic: z.string().max(120).optional().describe('New topic, or "" to clear it.'),
+      },
+    },
+    async ({ id, title, content, type, topic }) => {
+      if (title === undefined && content === undefined && type === undefined && topic === undefined) {
+        return failure(`Give at least one of title, content, type or topic to update note #${id}.`);
+      }
+      const result = notes.update(id, { title, content, type, topic });
+      if (result.status === "missing") return failure(`There is no note #${id}.`);
+      if (result.status === "topic_taken") {
+        const project = notes.get(id)?.project ?? "";
+        return failure(
+          `Topic "${clipLessonField(topic ?? "", 120)}" is already used by note #${result.otherId} in project "${clipLessonField(project, 80)}"; note #${id} was not changed.`,
+        );
+      }
+      const { note } = result;
+      return reply(`Updated note #${id} in project "${note.project}"${note.topic ? ` (topic ${note.topic})` : ""}.`);
     },
   );
 
