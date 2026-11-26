@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runProcess } from "../../src/adapters/commandRunner.ts";
 import { resolveOnPath, runCommand } from "../../src/harness/claudeMcp.ts";
 
 /**
@@ -49,6 +50,42 @@ describe("the claude command runner", () => {
     await expect(runCommand(FAKE, ["%PATH%"])).rejects.toThrow(/cannot pass .* safely through cmd\.exe/);
     await expect(runCommand(FAKE, ['a"b'])).rejects.toThrow(/cannot pass .* safely through cmd\.exe/);
     await expect(readFile(join(dir, "args.json"))).rejects.toThrow();
+  });
+});
+
+describe("the process runner", () => {
+  const ECHO = "factory-fake-echo";
+  beforeEach(async () => {
+    // Prints its arguments and stdin on stdout, a line on stderr, and exits with the code given as first argument.
+    await writeFile(
+      join(dir, "echo.js"),
+      'let input = "";\nprocess.stdin.on("data", (d) => (input += d)).on("end", () => {\n  process.stdout.write(JSON.stringify({ args: process.argv.slice(2), input, cwd: process.cwd() }));\n  process.stderr.write("tail of stderr");\n  process.exit(Number(process.argv[2]));\n});\n',
+    );
+    if (process.platform === "win32") {
+      await writeFile(join(dir, `${ECHO}.cmd`), `@echo off\r\nnode "%~dp0echo.js" %*\r\n`);
+    } else {
+      await writeFile(join(dir, ECHO), `#!/bin/sh\nexec node "$(dirname "$0")/echo.js" "$@"\n`);
+      await chmod(join(dir, ECHO), 0o755);
+    }
+  });
+
+  it("passes the arguments and stdin unchanged, in the given folder, and returns the exit code and both outputs", async () => {
+    const args = ["0", "C:/Program Files/a & b (x)/x.json", "x|y<z>^w", "-"];
+    const input = 'a prompt with "quotes", %PATH% and\nnew lines';
+    const r = await runProcess(ECHO, args, { input, cwd: dir, timeoutMs: 30_000 });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({ args, input, cwd: dir });
+    expect(r.stderr).toBe("tail of stderr");
+  });
+
+  it("resolves with a non-zero exit code instead of rejecting", async () => {
+    const r = await runProcess(ECHO, ["3"], { timeoutMs: 30_000 });
+    expect(r.code).toBe(3);
+    expect(r.stderr).toBe("tail of stderr");
+  });
+
+  it("rejects when the program is not on PATH", async () => {
+    await expect(runProcess("factory-missing-program", [], { timeoutMs: 30_000 })).rejects.toThrow();
   });
 });
 

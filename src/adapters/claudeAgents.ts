@@ -45,7 +45,8 @@ const buildSchema = z.object({
   blocked: z.string().optional(),
 });
 
-const lessonsSchema = z.object({
+/** The lesson writer's answer; every provider validates it with this schema. */
+export const lessonsSchema = z.object({
   lessons: z
     .array(
       z.object({
@@ -59,7 +60,8 @@ const lessonsSchema = z.object({
     .max(2),
 });
 
-const verdictSchema = z.object({
+/** A reviewer's answer; every provider validates it with this schema. */
+export const verdictSchema = z.object({
   summary: z.string(),
   findings: z.array(
     z.object({

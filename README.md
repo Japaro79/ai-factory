@@ -42,6 +42,7 @@ Design rules:
 - Node 22+
 - [GitHub CLI](https://cli.github.com/) logged in (`gh auth login`)
 - Claude credentials for the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) (a Claude subscription login or an API key)
+- Only when a role runs on Codex: the [Codex CLI](https://github.com/openai/codex) on your `PATH`, logged in (`codex login`)
 - The toolchain of each project you point it at (Flutter, Go, …) on your `PATH`
 
 ## Quick start
@@ -195,12 +196,42 @@ The repository holds only the factory. Everything about *your* projects stays on
 
 - `target`: GitHub repo, base branch, `stack`, `brain` (docs the agents must read first), `readOnlyPaths` (e.g. package caches agents may read, never write).
 - `memory`: `enabled`, `lessonWriter` (model of the agent that writes lessons).
+- `provider` on any role's settings: which AI runs it; see [Choosing the AI per role](#choosing-the-ai-per-role).
 - `checks.commands`: what must exit 0 after every build round.
 - `specWriter`, `builder`, `reviewers.*`: model, effort and turn limit per role; `builder.allowedBash` is the shell allowlist.
 - `limits`: `maxRounds`, `maxCostUsd` (estimated, at API list prices).
 - `risk`: `highRiskPaths` (glob + reason), `maxLowRiskChangedLines`, `testPathPatterns`.
 
 A full example: [examples/project.json](examples/project.json).
+
+### Choosing the AI per role
+
+Every role runs on Claude unless its settings name another `provider`. The reviewers and the lesson writer can run on
+[Codex](https://github.com/openai/codex) instead (`"provider": "codex"`, with an optional `model`; without one, codex
+uses its default for your account). The factory ignores your own `~/.codex/config.toml`, so a model or profile set there
+for interactive use never changes what the factory runs; set a `model` here only if your account can use it:
+
+```json
+"reviewers": {
+  "security": { "provider": "codex" },
+  "ux": { "model": "claude-sonnet-5-5", "effort": "medium", "maxTurns": 20 },
+  "ui": { "model": "claude-sonnet-5-5", "effort": "medium", "maxTurns": 20 },
+  "code": { "provider": "codex" }
+},
+"memory": { "lessonWriter": { "provider": "codex" } }
+```
+
+Why: a reviewer built on the same model as the builder shares its blind spots and tends to miss what the builder
+missed. A reviewer from another model judges the change with different eyes, and its findings come back in the same
+structured format.
+
+- Codex runs the reviewers and the lesson writer only, for now (issue #26). Codex on `specWriter` or `builder` is
+  refused when the config loads.
+- Codex roles run `codex exec` with a read-only sandbox, never through a shell, and get the same prompt and answer
+  schema as the Claude ones. A malformed answer is retried once; after that the reviewer counts as failed.
+- Before `run` or `poll` starts, the factory checks that `codex` is on `PATH` and logged in (`codex login status`).
+  If not, nothing starts, and the message names the roles and the fix (`npm i -g @openai/codex`, `codex login`).
+- Codex reports no price, so its calls add nothing to the estimated cost or the per-task budget.
 
 ## Running on a schedule (Windows)
 

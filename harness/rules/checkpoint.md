@@ -1,109 +1,37 @@
 # Checkpoint
 
-Checkpoint is an outside review for high-risk work, never a ritual for every change. The `factory check` command owns
-the risk tier, the frozen change, the validation of every result, the one correction and the seal; you follow its
-results and never decide them yourself. It calls no AI: the reviewers are your own installed `check-*` subagents, which
-you run on the tasks it prints and whose results you hand back unchanged.
+Checkpoint is an outside review for high-risk work, never a ritual. `factory check` owns the risk tier, the frozen
+change, result validation, the one correction and the seal; you follow its results and never decide them yourself. It
+calls no AI: you run your installed `check-*` subagents on the tasks it prints and hand their results back unchanged.
 
 ## When
 
-After an authorized implementation is complete and before you report it as done, if Checkpoint is on
-(`factory check mode status` only reads), run `factory check assess --json` from the repository (`--base-ref <ref>
---committed-only` for a committed range). Start a review only when `due` is true (`high_risk`) or the user explicitly
-asks for one. Otherwise do not review: verification by risk tier already covered it. Skip it when the user left this
-change unreviewed.
+After an authorized implementation and before reporting it done, if Checkpoint is on (`factory check mode status` only
+reads), run `factory check assess --json` from the repository (`--base-ref <ref> --committed-only` for a committed
+range; `--cwd <that repo>` on every call for another repository, only with the user's explicit authorization). Review
+only when `due` is true (`high_risk`) or the user asks; otherwise verification by risk tier already covered it. Skip it
+when the user left this change unreviewed.
 
-## Consent
+- Passive or low: quiet structural checks, no reviewer, no consent. Medium or high: ask consent only when `due` is true
+  or the user asks; review only on a yes; a no continues under normal policy.
+- Never lower a tier by your own judgment, task size or severity, nor infer low risk from a failed assessment. Raise a
+  known high-risk change with `--escalate-item <1-6> --escalate-reason "<line>"`.
+- With Checkpoint off, start or offer no reviews; normal checks remain.
 
-`assess` returns a `consent` question when a review is due. Ask it with the faithful-prompt rules, in the user's
-language: what the review is worth, the risk evidence, and the two choices with their consequences (yes reviews only
-this change; no skips only this change and records nothing). Run the review only after a clear yes, passing
-`--consent yes`. A no is for this change only and never turns Checkpoint off.
-
-## Lenses
-
-Choose every lens that fits what you touched and how, and only those; a change with one concern pays for one lens.
-Judge by consequence, not by file names or counts:
-
-- `security` when a mistake could expose, lose or irreversibly change something: stored data, credentials,
-  permissions, guards, or contracts others consume.
-- `failure` when it changes behavior under failure: errors, retries, timeouts, partial writes, load or concurrency.
-- `clarity` when it changes what others read or depend on: public APIs, command output and messages, docs or structure.
-- `proof` when it changes logic or observable behavior that tests should pin.
-
-Give one `--reason` naming what you touched and how. Meeting the requirements is verification's job before the review;
-never choose lenses to re-check the spec.
-
-To let the reviewers compare the change with what was asked, pass `--criteria <file>`: one acceptance criterion per
-line, the feature document's `S#` lines, or 3 to 5 short lines for small work (at most 12 lines and 4 KB). Every lens
-then answers each criterion with met, not_met or unproven; a criterion any lens finds not met blocks approval like any
-other blocker. Keep the file outside the repository, like result files.
-
-## Procedure
-
-1. Normalize first: run every formatter or generator that changes files before the review. After the review starts,
-   only check-only steps (formatting checks, typecheck, tests) may run; a change of bytes afterwards makes a new change
-   that needs its own review.
-2. `factory check review --lenses <a,b> --reason "<what and how>" --consent yes [--base-ref <ref> --committed-only]
-   [--criteria <file>]` freezes the change and prints `review_pending` with one task per lens: its `agent`
-   (`check-<lens>`), the `nonce`, the `changeFile`, the `reason`, the `criteria` when given and the result `schema`.
-   Each worktree keeps its own review in progress.
-3. Run every task's subagent in parallel, in one turn. Give each one its task as printed: the nonce, the change file to
-   read, the reason, the criteria and the schema. The subagent reads only that file and returns one JSON object that echoes the
-   task's nonce.
-4. Hand each result back unchanged, one per lens: `factory check capture --lens <lens> --file <result.json>` (or the
-   JSON on stdin); captures may run at the same time. Keep result files outside the repository: a new file inside it
-   changes the frozen change. A malformed result, or one without its task's nonce, is refused with the reason and
-   nothing is stored; rerun that subagent once with the task as printed. If the change moved since the review, capture
-   refuses: run `review` again. A `review_pending` reply that lists a lens task again asks for its one retry, with a new
-   nonce; otherwise it only names the lenses still `missing`.
-5. When a capture prints a `check-challenger` task, run it the same way and capture it with
-   `factory check capture --challenge --file <result.json>`. The challenger judges only the inferential severe findings.
-6. Read `outcome`:
-   - `approved`: the change is sealed. Report the advisories as follow-ups; they never reopen this change.
-   - `correction_required`: fix only the listed blockers, changing at most `budget` lines, then run
-     `factory check confirm`. There is exactly one correction.
-   - `needs_decision`: stop and give the user one **Needs your decision** result with the message and the open
-     blockers. Never retry on your own.
-7. `factory check confirm` checks the correction's size and prints a `check-confirmer` task with the blockers, the
-   corrected change file and the correction file. Run it and capture it with
-   `factory check capture --confirm --file <result.json>`, which returns `approved` (the corrected change is sealed) or
-   `needs_decision`. A refused confirmer result keeps the correction open.
-
-Exit codes: 0 means approved, 2 means read `outcome` (a pending task or a decision), 1 means an error or a refused
-result.
-
-Every Checkpoint seal (an approved review or correction; not the gate) keeps a receipt: `factory check receipt [<identity or prefix>] [--json]` shows what it covered (the lenses,
-each criterion's verdicts, the blockers, the advisories and the outcome); without an id, the latest one.
-
-A seal is per exact content: any later change is a new change. `assess` reports `already_reviewed` for a sealed one;
-do not review it again unless the user explicitly asks for a fresh independent review of new content.
+**When a review is due or asked for, load the `checkpoint-review` skill and follow it.** Large features assess per
+work-unit commit as `feature-flow` says.
 
 ## Before committing
 
-When the repository has the commit gate (`factory gate init` added its pre-commit hook), check the staged files before
-every commit you make:
+When the repository has the commit gate (`factory gate init` added its pre-commit hook), before every commit you make
+**load the `checkpoint-review` skill and follow its "Commit gate" section**. The gate needs no consent question.
 
-1. Stage exactly what you will commit, then run `factory gate review`. Exit 0 means there is nothing to check or this
-   staged change is already sealed. Exit 2 prints `gate_pending` with one task: its `agent` (`check-gate`), the
-   `nonce`, the `changeFile` (the rules and the staged diff) and the result `schema`.
-2. Run the `check-gate` subagent with its task as printed. It reads only that file and returns one JSON object that
-   echoes the task's nonce.
-3. Hand the result back unchanged: `factory gate capture --file <result.json>` (or the JSON on stdin), with the file
-   outside the repository. `passed` seals this exact staged change and the hook lets the commit through. `failed`
-   exits 1 and lists the violations: fix them, stage again and repeat from step 1. A malformed result, another task's
-   nonce or a staged change that moved since the review is refused and nothing is sealed.
+## Checkpoint belongs to the user
 
-The hook calls no AI: it only checks the seal of exactly the staged change. Without one it blocks the commit, unless
-`.factory/gate.json` sets `"strict": false`, which only warns. So review and capture before every commit you make. The
-gate needs no consent question.
+The user controls it with `factory check mode on|off|status`. It is on by default; an explicit global or per-repository
+"off" always wins, and per-change consent is separate from the switch. `status` only reads (a `default` source means
+nobody chose, so it is on). When the user asks to stop using it, run `factory check mode off` without arguing, working
+around it or offering alternatives. While off, keep building normally and never retry or re-enable reviews. Never switch
+it on or off yourself.
 
-## Another repository
-
-Review a change in another repository only when the user explicitly authorized it, by passing `--cwd <that repo>` to
-every `factory check` call, and keep that repository for the whole procedure.
-
-## Delivery stays the user's
-
-An approved seal is information, never permission. Commit, push, pull requests and releases remain the user's
-decisions under the repository's normal policy.
+An approved seal is information, never permission: commit, push, pull requests and releases stay the user's decisions.
