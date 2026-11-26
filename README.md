@@ -149,6 +149,7 @@ and the shared memory.
 ```bash
 factory setup install --dry-run     # see every file it would change
 factory setup install               # install for all four agents (or --agent claude-code,codex)
+factory setup install --style neutral  # response style: mentor (default), neutral or none; sync keeps it
 factory setup sync                  # after pulling: refresh only the agents already set up
 factory setup uninstall --dry-run   # see what removing the harness would change (or --agent codex)
 factory setup uninstall             # remove only our content; files you modified are kept and listed
@@ -195,7 +196,7 @@ The repository holds only the factory. Everything about *your* projects stays on
 | Session memory of each project | `~/.ai-factory/memory/notes.db` (served by `factory mcp`) |
 | Location of this checkout (for launchers) | `~/.ai-factory/home` |
 | Your own rules for the harness | `~/.ai-factory/harness/personal.md` |
-| Harness settings (models per subagent) | `~/.ai-factory/harness.json` |
+| Harness settings (models per subagent, response style) | `~/.ai-factory/harness.json` |
 | Backups taken before every `setup install` write | `~/.ai-factory/backups/<id>/` |
 | Checkpoint switch (global) | `~/.ai-factory/check.json`; per repository and seals in `<repo>/.git/factory-check/` |
 | Skill index of a project | `<repo>/.factory/skills.md` |

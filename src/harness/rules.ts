@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { FACTORY_HOME } from "../adapters/projectRegistry.ts";
 import type { Backups } from "./backups.ts";
 import { splitForSize, upsertBlock } from "./blocks.ts";
+import type { Style } from "./style.ts";
 
 /** The harness assets shipped with the factory: rules, output styles, agents, skills. */
 export const HARNESS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "harness");
@@ -39,16 +40,17 @@ const stripFrontmatter = (text: string) => text.replace(/^---\r?\n[\s\S]*?\r?\n-
 const readOrUndefined = (path: string) => readFile(path, "utf8").catch(() => undefined);
 
 /**
- * The rule blocks to install. Agents without output styles (Codex, OpenCode, Antigravity) get the Mentor style folded
- * into the voice block, so they keep the same tone and language rules.
+ * The rule blocks to install. Agents without output styles (Codex, OpenCode, Antigravity) get the chosen style (Mentor
+ * by default) folded into the voice block, so they keep the same tone and language rules; "none" folds in nothing.
  */
-export async function loadBlocks(options: { withStyle: boolean; personalFile?: string; harnessDir?: string }): Promise<Block[]> {
+export async function loadBlocks(options: { withStyle: boolean; style?: Style; personalFile?: string; harnessDir?: string }): Promise<Block[]> {
   const dir = options.harnessDir ?? HARNESS_DIR;
+  const style = options.style ?? "mentor";
   const blocks: Block[] = [];
   for (const name of RULE_ORDER) {
     let body = (await readAsset(join(dir, "rules", `${name}.md`))).trim();
-    if (name === "voice" && options.withStyle) {
-      body += "\n\n" + stripFrontmatter(await readAsset(join(dir, "output-styles", "mentor.md"))).replace(/^# Mentor\s*/, "");
+    if (name === "voice" && options.withStyle && style !== "none") {
+      body += "\n\n" + stripFrontmatter(await readAsset(join(dir, "output-styles", `${style}.md`))).replace(/^# [^\n]*\s*/, "");
     }
     blocks.push({ name, body });
     if (name === "voice") {
@@ -124,14 +126,16 @@ export async function harnessInstalled(agent: AgentId, home: string): Promise<bo
 }
 
 /** What installing the rules for one agent would change, without changing anything. */
-export async function planRules(agent: AgentId, home: string, options: { personalFile?: string; harnessDir?: string } = {}): Promise<Plan> {
+export async function planRules(agent: AgentId, home: string, options: { personalFile?: string; harnessDir?: string; style?: Style } = {}): Promise<Plan> {
   const withStyle = agent !== "claude-code";
   const blocks = await loadBlocks({ withStyle, ...options });
   const where = rulesLocation(agent, home);
   const writes = "file" in where ? await planInstructionFile(where.file, blocks) : await planAntigravity(where.dir, blocks);
-  if (agent === "claude-code") {
-    const stylePath = join(home, ".claude", "output-styles", "mentor.md");
-    const style = await readAsset(join(options.harnessDir ?? HARNESS_DIR, "output-styles", "mentor.md"));
+  const chosen = options.style ?? "mentor";
+  // With "none" the user's own output style stays theirs: no style file is written.
+  if (agent === "claude-code" && chosen !== "none") {
+    const stylePath = join(home, ".claude", "output-styles", `${chosen}.md`);
+    const style = await readAsset(join(options.harnessDir ?? HARNESS_DIR, "output-styles", `${chosen}.md`));
     if ((await readOrUndefined(stylePath)) !== style) writes.push({ path: stylePath, content: style });
   }
   return { agent, writes };

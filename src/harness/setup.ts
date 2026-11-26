@@ -1,8 +1,10 @@
-import { resolve } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 import type { Backups } from "./backups.ts";
 import { memoryRegistered, registerMemoryInClaude, unregisterMemoryInClaude, type CommandRunner } from "./claudeMcp.ts";
-import { planHarness, type InstallOptions } from "./install.ts";
+import { jsonWrite, planHarness, type InstallOptions } from "./install.ts";
 import { AGENTS, applyPlan, harnessInstalled, HARNESS_DIR, type AgentId, type Plan } from "./rules.ts";
+import { DEFAULT_SETTINGS_FILE, isStyle, unknownStyle } from "./style.ts";
 import { planUninstall, pruneEmptyFolders } from "./uninstall.ts";
 
 export interface SetupRun {
@@ -17,6 +19,8 @@ export interface SetupRun {
   home: string;
   backups: Backups;
   planOptions?: InstallOptions;
+  /** --style (install only): mentor, neutral or none, stored in harness.json before installing so sync keeps it. */
+  style?: string;
   /** Whether a command is on PATH. With runCommand, turns on the Claude Code registration; absent means it is skipped. */
   hasCommand?: (command: string) => Promise<boolean>;
   /** Runs `claude mcp add`. Only the CLI passes the real runner; absent means nothing external runs. */
@@ -27,6 +31,15 @@ export interface SetupRun {
 
 /** `factory setup install|sync|uninstall`: plans each agent, backs up, then writes. Returns the exit code. */
 export async function setupAgents(run: SetupRun): Promise<number> {
+  // Both refusals come before anything is read or written.
+  if (run.style !== undefined && run.action !== "install") {
+    run.err(styleOnlyOnInstall(run.action));
+    return 1;
+  }
+  if (run.style !== undefined && !isStyle(run.style)) {
+    run.err(unknownStyle(run.style));
+    return 1;
+  }
   const requested = run.agentList ? run.agentList.split(",").map((a) => a.trim()) : [...AGENTS];
   const unknown = requested.filter((a) => !(AGENTS as readonly string[]).includes(a));
   if (unknown.length) {
@@ -55,13 +68,23 @@ export async function setupAgents(run: SetupRun): Promise<number> {
     }
     agents = installed;
   }
+  let planOptions = run.planOptions;
+  if (isStyle(run.style)) {
+    planOptions = { ...run.planOptions, style: run.style };
+    try {
+      await storeStyle(run, run.style);
+    } catch (error) {
+      run.err(`style: not stored, nothing changed: ${error instanceof Error ? error.message : error}`);
+      return 1;
+    }
+  }
   let failed = 0;
   for (const agent of agents) {
     let plan: Plan;
     let kept: string[] = [];
     try {
-      if (run.action === "uninstall") ({ plan, kept } = await planUninstall(agent, run.home, run.planOptions));
-      else plan = await planHarness(agent, run.home, run.planOptions);
+      if (run.action === "uninstall") ({ plan, kept } = await planUninstall(agent, run.home, planOptions));
+      else plan = await planHarness(agent, run.home, planOptions);
     } catch (error) {
       // One agent's unreadable config never blocks the others; nothing is written for this one.
       run.err(`${agent}: skipped, nothing changed: ${error instanceof Error ? error.message : error}`);
@@ -85,6 +108,27 @@ export async function setupAgents(run: SetupRun): Promise<number> {
   }
   if (claudeLeftover && (await claudeMemoryStep(run))) failed++;
   return failed ? 1 : 0;
+}
+
+/** The refusal for --style on a setup subcommand other than install. */
+export const styleOnlyOnInstall = (action: string) => `setup ${action} does not support --style; use it with setup install.`;
+
+/**
+ * Stores the chosen style in harness.json, keeping every other key; backed up like any setup write. A dry run only says
+ * what it would store.
+ */
+async function storeStyle(run: SetupRun, style: string): Promise<void> {
+  const file = run.planOptions?.settingsFile ?? DEFAULT_SETTINGS_FILE;
+  const writes = await jsonWrite(file, (settings) => ({ ...settings, style }));
+  if (!writes.length) return;
+  if (run.dryRun) {
+    run.out(`style: would store ${style} in ${file}`);
+    return;
+  }
+  const backupId = await run.backups.snapshot([file], "harness style");
+  await mkdir(dirname(file), { recursive: true });
+  await writeFile(file, writes[0]!.content!);
+  run.out(`style: ${style} stored in ${file}, backup ${backupId} (undo: factory setup restore ${backupId})`);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
-import { FACTORY_HOME } from "../adapters/projectRegistry.ts";
 import { HARNESS_DIR, planRules, readAsset, type AgentId, type Plan, type Write } from "./rules.ts";
+import { DEFAULT_SETTINGS_FILE, MANAGED_STYLES, readHarnessSettings, storedStyle, type Style } from "./style.ts";
 
 /**
  * Everything the harness installs besides the rule blocks: skills, subagents, the memory and docs MCP servers, session
@@ -16,16 +16,14 @@ export interface InstallOptions {
   personalFile?: string;
   /** ~/.ai-factory/harness.json: models per subagent and agent, for example {"agents": {"factory-builder": {"opencode": "openai/gpt-5.5"}}}. */
   settingsFile?: string;
+  /** The response style to install; absent means the one stored in harness.json (mentor when none is stored). */
+  style?: Style;
 }
 
 type AgentModels = Record<string, Partial<Record<AgentId, string>>>;
 
 async function agentModels(file: string): Promise<AgentModels> {
-  try {
-    return (JSON.parse(await readFile(file, "utf8")) as { agents?: AgentModels }).agents ?? {};
-  } catch {
-    return {};
-  }
+  return ((await readHarnessSettings(file)) as { agents?: AgentModels }).agents ?? {};
 }
 
 type Access = "read" | "run" | "write";
@@ -230,11 +228,13 @@ export async function planHarness(agent: AgentId, home: string, options: Install
   const harnessDir = options.harnessDir ?? HARNESS_DIR;
   const factoryHome = options.factoryHome ?? resolve(harnessDir, "..");
   const command = factoryCommand(factoryHome);
-  const rules = await planRules(agent, home, { harnessDir, personalFile: options.personalFile });
+  const settingsFile = options.settingsFile ?? DEFAULT_SETTINGS_FILE;
+  const style = options.style ?? (await storedStyle(settingsFile));
+  const rules = await planRules(agent, home, { harnessDir, personalFile: options.personalFile, style });
   const agents = await renderAgents(harnessDir);
   const writes: Write[] = [...rules.writes];
   const guard = async (name: string) => JSON.parse(await readFile(join(harnessDir, "guard", `${name}.json`), "utf8"));
-  const models = await agentModels(options.settingsFile ?? join(FACTORY_HOME, "harness.json"));
+  const models = await agentModels(settingsFile);
 
   switch (agent) {
     case "claude-code": {
@@ -247,7 +247,8 @@ export async function planHarness(agent: AgentId, home: string, options: Install
       const hook = { hooks: [{ type: "command", command: shellCommand(command, "check", "hook"), timeout: 30 }] };
       writes.push(
         ...(await jsonWrite(join(home, ".claude", "settings.json"), (s) => {
-          s.outputStyle = "Mentor";
+          // With "none" the user's own outputStyle (or its absence) stays exactly as it is.
+          if (style !== "none") s.outputStyle = MANAGED_STYLES[style];
           const perms = s.permissions ?? {};
           perms.allow = [...new Set([...(perms.allow ?? []), ...g.allow])];
           perms.deny = [...new Set([...(perms.deny ?? []), ...g.deny])];
