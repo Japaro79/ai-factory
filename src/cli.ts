@@ -275,11 +275,23 @@ async function main(): Promise<number> {
       console.log("No projects registered. Register one with: factory add --repo <path>");
       return 0;
     }
+    // Every configured non-Claude provider is checked for every project before the first one starts.
+    const { precheckProviders } = await import("./adapters/agentProvider.ts");
+    const configs: Awaited<ReturnType<typeof loadConfig>>[] = [];
+    for (const p of projects) {
+      const config = await loadConfig(p.configPath);
+      const problem = await precheckProviders(config);
+      if (problem) {
+        console.error(`${p.name}: ${problem}`);
+        return 1;
+      }
+      configs.push(config);
+    }
     return withPollLock(async () => {
       let code = 0;
-      for (const p of projects) {
+      for (const [i, p] of projects.entries()) {
         console.log(`— ${p.name}`);
-        const config = await loadConfig(p.configPath);
+        const config = configs[i]!;
         const { wire } = await import("./wire.ts");
         const { deps, settings } = wire(config, { dryRun: values["dry-run"] === true, runsDir: runsDirFor(p.configPath), projectName: p.name });
         code = Math.max(code, await pollOnce(deps, settings, config.intake.label));
@@ -318,8 +330,15 @@ async function main(): Promise<number> {
   const text = values.text;
   const dryRun = values["dry-run"] === true || taskFile !== undefined;
   // Only run and poll need the issue factory's AI adapters; every other command starts without loading them.
-  const { wire } = await import("./wire.ts");
-  const { deps, settings } = wire(config, { dryRun, taskFile, text, runsDir: runsDirFor(configPath) });
+  const { wire, wireForRun } = await import("./wire.ts");
+  const wireOptions = { dryRun, taskFile, text, runsDir: runsDirFor(configPath) };
+  // run and poll check every configured non-Claude provider first: nothing starts when one is missing or logged out.
+  const wired = command === "run" || command === "poll" ? await wireForRun(config, wireOptions) : wire(config, wireOptions);
+  if ("error" in wired) {
+    console.error(wired.error);
+    return 1;
+  }
+  const { deps, settings } = wired;
   if (dryRun) console.log("Dry run: nothing will be pushed, opened, labeled or commented on GitHub.");
 
   if ((command === "run" || command === "poll") && values["no-dashboard"] !== true) {
