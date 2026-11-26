@@ -39,9 +39,11 @@ describe("ai-factory-memory project notes", () => {
       "lessons_save",
       "lessons_search",
       "memory_context",
+      "memory_delete",
       "memory_get",
       "memory_save",
       "memory_search",
+      "memory_update",
       "session_summary",
     ]);
   });
@@ -121,6 +123,73 @@ describe("ai-factory-memory project notes", () => {
     expect((await client.callTool({ name: "memory_save", arguments: { title: "x".repeat(200), content: "c", type: "other" } })).isError).toBe(true);
     expect((await client.callTool({ name: "memory_save", arguments: { title: "Sneaky", content: "c", type: "session" } })).isError).toBe(true);
     expect(text(await client.callTool({ name: "memory_get", arguments: { id: 999 } }))).toMatch(/no note #999/i);
+  });
+});
+
+describe("ai-factory-memory delete and update", () => {
+  const saveNote = async (client: Client, args: Record<string, unknown>) =>
+    Number(text(await client.callTool({ name: "memory_save", arguments: args })).match(/#(\d+)/)![1]);
+
+  it("deletes a note of any project so search, context and get no longer show it", async () => {
+    const shop = await connect("shop");
+    const blog = await connect("blog");
+    const id = await saveNote(blog, { title: "Wrong cache advice", content: "flush the cache daily", type: "discovery" });
+    const deleted = await shop.callTool({ name: "memory_delete", arguments: { id } });
+    expect(deleted.isError).toBeFalsy();
+    expect(text(deleted)).toBe(`Deleted note #${id} "Wrong cache advice" from project "blog".`);
+    expect(text(await blog.callTool({ name: "memory_search", arguments: { query: "cache" } }))).toMatch(/no notes/i);
+    expect(text(await blog.callTool({ name: "memory_context", arguments: {} }))).not.toContain("Wrong cache advice");
+    expect(text(await blog.callTool({ name: "memory_get", arguments: { id } }))).toMatch(new RegExp(`no note #${id}`, "i"));
+  });
+
+  it("reports an unknown id as an error that names it", async () => {
+    const result = await (await connect()).callTool({ name: "memory_delete", arguments: { id: 404 } });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe("There is no note #404.");
+    const update = await (await connect()).callTool({ name: "memory_update", arguments: { id: 404, title: "Anything" } });
+    expect(update.isError).toBe(true);
+    expect(text(update)).toBe("There is no note #404.");
+  });
+
+  it("updates the given fields, keeps the id and reports the project", async () => {
+    const client = await connect();
+    const id = await saveNote(client, { title: "Use Jest", content: "jest for unit tests", type: "decision", topic: "tests/runner" });
+    const updated = await client.callTool({ name: "memory_update", arguments: { id, content: "vitest for unit tests" } });
+    expect(updated.isError).toBeFalsy();
+    expect(text(updated)).toBe(`Updated note #${id} in project "shop" (topic tests/runner).`);
+    expect(text(await client.callTool({ name: "memory_search", arguments: { query: "vitest" } }))).toContain(`#${id}`);
+    expect(text(await client.callTool({ name: "memory_get", arguments: { id } }))).toContain("vitest for unit tests");
+    expect(text(await client.callTool({ name: "memory_update", arguments: { id, topic: "" } }))).toBe(`Updated note #${id} in project "shop".`);
+    expect(notes.get(id)!.topic).toBeUndefined();
+  });
+
+  it("refuses a topic another note of the project uses and names that note", async () => {
+    const client = await connect();
+    const first = await saveNote(client, { title: "CI node", content: "node 22", type: "config", topic: "ci/node" });
+    const second = await saveNote(client, { title: "CI cache", content: "cache npm", type: "config", topic: "ci/cache" });
+    const result = await client.callTool({ name: "memory_update", arguments: { id: second, topic: "ci/node" } });
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(`Topic "ci/node" is already used by note #${first} in project "shop"; note #${second} was not changed.`);
+    expect(notes.get(second)!.topic).toBe("ci/cache");
+  });
+
+  it("refuses an update with no field to change, and a session type", async () => {
+    const client = await connect();
+    const id = await saveNote(client, { title: "CI node", content: "node 22", type: "config" });
+    const empty = await client.callTool({ name: "memory_update", arguments: { id } });
+    expect(empty.isError).toBe(true);
+    expect(text(empty)).toBe(`Give at least one of title, content, type or topic to update note #${id}.`);
+    expect((await client.callTool({ name: "memory_update", arguments: { id, type: "session" } })).isError).toBe(true);
+    expect(notes.get(id)).toMatchObject({ title: "CI node", content: "node 22", type: "config" });
+  });
+
+  it("still lets memory_save replace the note of a topic after an update moved it there", async () => {
+    const client = await connect();
+    const id = await saveNote(client, { title: "CI node", content: "node 22", type: "config" });
+    await client.callTool({ name: "memory_update", arguments: { id, topic: "ci/node" } });
+    const saved = text(await client.callTool({ name: "memory_save", arguments: { title: "CI node", content: "node 25", type: "config", topic: "ci/node" } }));
+    expect(saved).toBe(`Updated note #${id} in project "shop" (topic ci/node).`);
+    expect(notes.search({ query: "node", project: "shop", limit: 10 }).map((n) => [n.id, n.content])).toEqual([[id, "node 25"]]);
   });
 });
 

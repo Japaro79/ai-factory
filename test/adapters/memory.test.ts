@@ -61,6 +61,21 @@ describe("JsonlMemory", () => {
     expect(found.map((l) => l.title)).toEqual(["Vitest cannot resolve paths with spaces on Windows", "Windows paths in Go tests"]);
   });
 
+  it("imports only lessons the file does not hold yet, keeping their time, through the same line format", async () => {
+    const file = join(dir, "lessons.jsonl");
+    const mem = new JsonlMemory(file);
+    await mem.save(lesson({ createdAt: "2026-01-01T00:00:00.000Z" }));
+    const result = await mem.importLessons([
+      lesson({ title: "  VITEST cannot resolve paths with spaces on windows ", createdAt: "2026-05-05T00:00:00.000Z" }),
+      lesson({ fix: "A different fix.", createdAt: "2026-02-02T00:00:00.000Z" }),
+    ]);
+    expect(result).toEqual({ added: 1, skipped: 1 });
+    const lines = (await readFile(file, "utf8")).trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(lines[1]).toBe(JSON.stringify({ ...lesson({ fix: "A different fix." }), createdAt: "2026-02-02T00:00:00.000Z" }));
+    expect((await mem.list()).map((l) => l.fix)).toEqual([lesson().fix, "A different fix."]);
+  });
+
   it("returns nothing when there is no file or no match", async () => {
     const mem = new JsonlMemory(join(dir, "none.jsonl"));
     expect(await mem.recall({ text: "anything", stack: "node", limit: 5 })).toEqual([]);

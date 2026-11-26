@@ -5,7 +5,8 @@ import type { Lesson } from "../domain/types.ts";
 import { z } from "zod";
 import { FACTORY_HOME } from "./projectRegistry.ts";
 
-const lessonSchema = z.object({
+/** The shape of one stored lesson line; import validates its lines with it too. */
+export const lessonSchema = z.object({
   title: z.string(),
   problem: z.string(),
   fix: z.string(),
@@ -40,6 +41,9 @@ export function keywords(text: string): string[] {
 
 const sameTitle = (a: string) => a.trim().toLowerCase();
 
+/** Equal lessons share this key: the dedupe title and every other field but the time it was saved. */
+const lessonKey = (l: Lesson) => JSON.stringify([sameTitle(l.title), l.problem, l.fix, l.stack, l.tags, l.source]);
+
 /** Lessons in a JSONL file. Recall is keyword overlap, with a bonus for the same stack. */
 export class JsonlMemory implements Memory {
   constructor(private readonly file: string = DEFAULT_LESSONS_FILE) {}
@@ -49,7 +53,8 @@ export class JsonlMemory implements Memory {
     await appendFile(this.file, `${JSON.stringify({ ...lesson, createdAt: lesson.createdAt ?? new Date().toISOString() })}\n`, "utf8");
   }
 
-  async recall(query: RecallQuery): Promise<Lesson[]> {
+  /** Every readable lesson, in file order. */
+  async list(): Promise<Lesson[]> {
     let text: string;
     try {
       text = await readFile(this.file, "utf8");
@@ -57,9 +62,8 @@ export class JsonlMemory implements Memory {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    const wanted = new Set(keywords(query.text));
     // Anyone can append to this file (factory, MCP clients, a hand edit): one bad line must never cost the whole memory.
-    const lessons = text.split("\n").filter(Boolean).flatMap((line) => {
+    return text.split("\n").filter(Boolean).flatMap((line) => {
       try {
         const parsed = lessonSchema.safeParse(JSON.parse(line));
         return parsed.success ? [parsed.data] : [];
@@ -67,6 +71,26 @@ export class JsonlMemory implements Memory {
         return [];
       }
     });
+  }
+
+  /**
+   * Adds imported lessons through `save`, skipping each one equal to a lesson the file held before: the same title as
+   * recall's dedupe compares it, and the same problem, fix, stack, tags and source. Lessons keep their `createdAt`.
+   */
+  async importLessons(lessons: Lesson[]): Promise<{ added: number; skipped: number }> {
+    const existing = new Set((await this.list()).map(lessonKey));
+    let added = 0;
+    for (const lesson of lessons) {
+      if (existing.has(lessonKey(lesson))) continue;
+      await this.save(lesson);
+      added++;
+    }
+    return { added, skipped: lessons.length - added };
+  }
+
+  async recall(query: RecallQuery): Promise<Lesson[]> {
+    const lessons = await this.list();
+    const wanted = new Set(keywords(query.text));
     const scored = lessons
       .map((l) => {
         const own = new Set(keywords([l.title, l.problem, l.fix, l.tags.join(" ")].join(" ")));

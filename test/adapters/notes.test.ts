@@ -190,3 +190,60 @@ describe("projectNameFor", () => {
     expect(projectNameFor(plain, { gitRoot: () => undefined })).toBe("loose");
   });
 });
+
+describe("SqliteNotes.delete", () => {
+  it("removes the note from get, search and recent, and returns what it removed", () => {
+    const kept = notes.save({ project: "shop", type: "decision", title: "Keep Vitest", content: "vitest stays" });
+    const gone = notes.save({ project: "shop", type: "bugfix", title: "Wrong vitest note", content: "outdated vitest advice", topic: "ci/vitest" });
+    expect(notes.delete(gone.id)).toMatchObject({ id: gone.id, project: "shop", title: "Wrong vitest note" });
+    expect(notes.get(gone.id)).toBeUndefined();
+    expect(notes.search({ query: "vitest", project: "shop", limit: 10 }).map((n) => n.id)).toEqual([kept.id]);
+    expect(notes.recent({ project: "shop", limit: 10 }).map((n) => n.id)).toEqual([kept.id]);
+    // The topic is free again.
+    expect(notes.save({ project: "shop", type: "bugfix", title: "Right note", content: "x", topic: "ci/vitest" }).updated).toBe(false);
+  });
+
+  it("returns nothing and changes nothing for an unknown id", () => {
+    const kept = notes.save({ project: "shop", type: "decision", title: "Keep Vitest", content: "vitest stays" });
+    expect(notes.delete(kept.id + 100)).toBeUndefined();
+    expect(notes.list().map((n) => n.id)).toEqual([kept.id]);
+  });
+});
+
+describe("SqliteNotes.update", () => {
+  it("changes only the given fields, keeps the id, moves updated_at forward and keeps search in sync", () => {
+    const { id } = notes.save({ project: "shop", type: "decision", title: "Use Jest", content: "jest for unit tests", topic: "tests/runner" });
+    const before = notes.get(id)!;
+    const result = notes.update(id, { content: "vitest for unit tests" });
+    expect(result).toMatchObject({ status: "updated", note: { id, project: "shop", type: "decision", title: "Use Jest", topic: "tests/runner" } });
+    const after = notes.get(id)!;
+    expect(after.content).toBe("vitest for unit tests");
+    expect(after.createdAt).toBe(before.createdAt);
+    expect(after.updatedAt > before.updatedAt).toBe(true);
+    expect(notes.search({ query: "vitest", project: "shop", limit: 5 }).map((n) => n.id)).toEqual([id]);
+    expect(notes.search({ query: "jest", project: "shop", limit: 5 }).map((n) => n.id)).toEqual([id]); // the title still says Jest
+    notes.update(id, { title: "Use Vitest", type: "convention" });
+    expect(notes.search({ query: "jest", project: "shop", limit: 5 })).toEqual([]);
+    expect(notes.get(id)).toMatchObject({ title: "Use Vitest", type: "convention", content: "vitest for unit tests" });
+  });
+
+  it("refuses a topic another note of the same project uses, naming that note, and changes nothing", () => {
+    const first = notes.save({ project: "shop", type: "config", title: "CI node", content: "node 22", topic: "ci/node" });
+    const second = notes.save({ project: "shop", type: "config", title: "CI cache", content: "cache npm", topic: "ci/cache" });
+    const other = notes.save({ project: "blog", type: "config", title: "Blog CI", content: "node 20", topic: "ci/blog" });
+    const before = notes.get(second.id);
+    expect(notes.update(second.id, { topic: "ci/node", title: "Renamed" })).toEqual({ status: "topic_taken", otherId: first.id });
+    expect(notes.get(second.id)).toEqual(before);
+    // Another project's topic and the note's own topic are fine.
+    expect(notes.update(other.id, { topic: "ci/node" }).status).toBe("updated");
+    expect(notes.update(first.id, { topic: "ci/node" }).status).toBe("updated");
+  });
+
+  it("clears the topic with an empty one and reports an unknown id", () => {
+    const { id } = notes.save({ project: "shop", type: "config", title: "CI node", content: "node 22", topic: "ci/node" });
+    expect(notes.update(id, { topic: "" }).status).toBe("updated");
+    expect(notes.get(id)!.topic).toBeUndefined();
+    expect(notes.search({ query: "ci", project: "shop", limit: 5 }).map((n) => n.id)).toEqual([id]); // the title still has CI
+    expect(notes.update(id + 100, { title: "Nope" })).toEqual({ status: "missing" });
+  });
+});
