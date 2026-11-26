@@ -35,6 +35,19 @@ export interface MigrationResult {
   conflicts: MigrationConflict[];
 }
 
+/** Fields `update` may change; only the given ones change, and an empty topic clears it. */
+export interface NoteChanges {
+  title?: string;
+  content?: string;
+  type?: NoteType;
+  topic?: string;
+}
+
+export type UpdateResult = { status: "updated"; note: Note } | { status: "missing" } | { status: "topic_taken"; otherId: number };
+
+/** A note read from an export file: everything but its id, which the store assigns again. */
+export type ImportedNote = Omit<Note, "id">;
+
 const toNote = (r: Row): Note => ({
   id: r.id,
   project: r.project,
@@ -132,6 +145,109 @@ export class SqliteNotes {
   get(id: number): Note | undefined {
     const row = this.db.prepare("SELECT * FROM notes WHERE id = ?").get(id) as Row | undefined;
     return row ? toNote(row) : undefined;
+  }
+
+  /** Every note in id order, or one project's; for export. */
+  list(project?: string): Note[] {
+    const rows = (
+      project === undefined
+        ? this.db.prepare("SELECT * FROM notes ORDER BY id").all()
+        : this.db.prepare("SELECT * FROM notes WHERE project = ? ORDER BY id").all(project)
+    ) as unknown as Row[];
+    return rows.map(toNote);
+  }
+
+  /** Removes one note of any project, with its full-text row; returns what it removed, or nothing for an unknown id. */
+  delete(id: number): Note | undefined {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const note = this.get(id);
+      if (note) {
+        this.db.prepare("DELETE FROM notes WHERE id = ?").run(id);
+        this.db.prepare("DELETE FROM notes_fts WHERE rowid = ?").run(id);
+      }
+      this.db.exec("COMMIT");
+      return note;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /**
+   * Changes only the given fields of a note, keeping its id. An empty topic clears it; a topic another note of the same
+   * project uses is refused with that note's id. `updated_at` always moves forward, even within the same millisecond.
+   */
+  update(id: number, changes: NoteChanges): UpdateResult {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const note = this.get(id);
+      if (!note) {
+        this.db.exec("ROLLBACK");
+        return { status: "missing" };
+      }
+      const topic = changes.topic === undefined ? note.topic : changes.topic || undefined;
+      if (topic !== undefined && topic !== note.topic) {
+        const other = this.db.prepare("SELECT id FROM notes WHERE project = ? AND topic = ? AND id <> ?").get(note.project, topic, id) as { id: number } | undefined;
+        if (other) {
+          this.db.exec("ROLLBACK");
+          return { status: "topic_taken", otherId: other.id };
+        }
+      }
+      const now = new Date();
+      const previous = Date.parse(note.updatedAt);
+      const updatedAt = (Number.isNaN(previous) || now.getTime() > previous ? now : new Date(previous + 1)).toISOString();
+      const { topic: _previousTopic, ...rest } = note;
+      const next: Note = {
+        ...rest,
+        type: changes.type ?? note.type,
+        title: changes.title ?? note.title,
+        content: changes.content ?? note.content,
+        ...(topic ? { topic } : {}),
+        updatedAt,
+      };
+      this.db
+        .prepare("UPDATE notes SET type = ?, title = ?, content = ?, topic = ?, updated_at = ? WHERE id = ?")
+        .run(next.type, next.title, next.content, next.topic ?? null, updatedAt, id);
+      this.db.prepare("DELETE FROM notes_fts WHERE rowid = ?").run(id);
+      this.db.prepare("INSERT INTO notes_fts (rowid, title, content, topic) VALUES (?, ?, ?, ?)").run(id, next.title, next.content, next.topic ?? "");
+      this.db.exec("COMMIT");
+      return { status: "updated", note: next };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /**
+   * Adds imported notes in one transaction, keeping their project, topic, type, title, content and timestamps under new
+   * ids. A note is skipped when its project already has its (non-empty) topic, or had its title and content before this
+   * import, so importing the same notes twice adds nothing the second time.
+   */
+  importNotes(imported: ImportedNote[]): { added: number; skipped: number } {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const last = this.db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM notes").get() as { id: number };
+      const topicTaken = this.db.prepare("SELECT 1 FROM notes WHERE project = ? AND topic = ?");
+      const textTaken = this.db.prepare("SELECT 1 FROM notes WHERE project = ? AND title = ? AND content = ? AND id <= ?");
+      const insert = this.db.prepare("INSERT INTO notes (project, type, title, content, topic, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+      const index = this.db.prepare("INSERT INTO notes_fts (rowid, title, content, topic) VALUES (?, ?, ?, ?)");
+      let added = 0;
+      for (const n of imported) {
+        const topic = n.topic || undefined;
+        const exists =
+          (topic !== undefined && topicTaken.get(n.project, topic) !== undefined) || textTaken.get(n.project, n.title, n.content, last.id) !== undefined;
+        if (exists) continue;
+        const id = Number(insert.run(n.project, n.type, n.title, n.content, topic ?? null, n.createdAt, n.updatedAt).lastInsertRowid);
+        index.run(id, n.title, n.content, topic ?? "");
+        added++;
+      }
+      this.db.exec("COMMIT");
+      return { added, skipped: imported.length - added };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   /** Best matches first; every project when no project is given. */

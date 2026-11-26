@@ -74,6 +74,8 @@ factory poll [--project <name>] [--dry-run]                   open issues labele
 factory check-config --project <name>                         print the resolved target, checks and limits
 factory dashboard [--port 4747]                               live dashboard over every registered project
 factory mcp                                                   serve the lessons and the session memory over MCP (stdio)
+factory memory export [--project <p>] [--file <f>]            notes and lessons as JSON lines, to stdout or a new file
+factory memory import --file <f>                              add an export's notes and lessons, skipping those already stored
 ```
 
 `run` and `poll` also start the dashboard in the background unless one is already running (`--no-dashboard` to skip).
@@ -117,6 +119,8 @@ where the last one stopped:
 | `memory_search` | Full-text search of the notes of this project, another one (`project`) or all of them (`all_projects`). |
 | `memory_context` | The last session summary and the most recent notes, for the start of a session or after a compaction. |
 | `memory_get` | One note in full, by id. |
+| `memory_update` | Corrects one note by id, of any project: only the given `title`, `content`, `type` or `topic` change and the id stays. An empty `topic` clears it; a topic another note of the same project uses is refused, naming that note. |
+| `memory_delete` | Deletes one wrong or outdated note by id, of any project; it no longer appears in search, context or get. |
 | `session_summary` | Saves what a session did, decided and left pending. |
 
 - **Current project.** The repository's `origin` remote, normalized to `host/owner/repo` (lowercase, no scheme,
@@ -135,6 +139,17 @@ where the last one stopped:
 - **Storage.** `~/.ai-factory/memory/notes.db`, an SQLite file (Node's built-in `node:sqlite`, no extra dependency)
   with full-text search, safe for several sessions at once.
 - **Untrusted by design.** Notes come back fenced as data, like the lessons, and every input is bounded.
+- **Export and import.** `factory memory export [--project <p>] [--file <f>]` writes one JSON object per line: every
+  note (or one project's; an old folder name finds its migrated id) as
+  `{"kind":"note","id":…,"project":…,"topic":…|null,"type":…,"title":…,"content":…,"created_at":…,"updated_at":…}`,
+  then every lesson as `{"kind":"lesson",…}` with its stored fields (lessons are global, so `--project` does not
+  filter them). Without `--file` it writes to stdout; a `--file` that exists is never overwritten, and a new one is
+  owner-only where the platform allows. Counts go to stderr. `factory memory import --file <f>` checks every line
+  first: a malformed one stops it with its line number before anything is written, and the notes go in one
+  transaction. Notes get new ids and keep their project, topic, type, title, content and timestamps; a note is skipped
+  when its project already has its topic, or already had the same title and content. A lesson is skipped when an
+  equal one exists (same title ignoring case and surrounding spaces, same problem, fix, stack, tags and source). So
+  importing a file twice adds nothing the second time. There is no git sync: notes may hold private data.
 - **Tell your agent to use it.** Tools alone are not enough: paste [harness/rules/memory.md](harness/rules/memory.md)
   into your `~/.claude/CLAUDE.md` (or your agent's equivalent) so it loads context at the start, saves as it works and
   writes a summary at the end.

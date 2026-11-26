@@ -52,6 +52,10 @@ Usage:
                                               risk calls for, with the agent's own check-* subagents (no AI call
                                               here). Run "factory check" for its options.
   factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
+  factory memory export [--project <p>] [--file <f>]  Write the notes (all, or one project's) and every lesson as
+                                              JSON lines to stdout, or to a new file (never overwritten).
+  factory memory import --file <f>            Add the notes and lessons of an export file, skipping those already
+                                              stored; a malformed line stops it before anything is written.
 
 Options:
   --project <name|path>  A registered project; uses its .factory/project.json.
@@ -216,6 +220,25 @@ async function main(): Promise<number> {
       return 1;
     }
     return updateCommand(values.check === true);
+  }
+  if (command === "memory") {
+    const unsupported = unsupportedOptions(values, ["project", "file"]);
+    if (unsupported.length) {
+      console.error(`memory does not support ${unsupported.map((name) => `--${name}`).join(", ")}`);
+      return 1;
+    }
+    // Loaded here only, so node:sqlite stays out of every other command; the stores open once the arguments are valid.
+    const { memoryCommand } = await import("./adapters/memoryTransfer.ts");
+    const { SqliteNotes } = await import("./adapters/notes.ts");
+    return memoryCommand(
+      {
+        action: positionals[1],
+        project: values.project,
+        file: values.file === undefined ? undefined : resolve(values.file),
+        open: () => ({ notes: new SqliteNotes(), lessons: new JsonlMemory() }),
+      },
+      { out: console.log, err: console.error },
+    );
   }
   if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true, values.style);
 
