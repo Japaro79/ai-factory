@@ -119,8 +119,19 @@ where the last one stopped:
 | `memory_get` | One note in full, by id. |
 | `session_summary` | Saves what a session did, decided and left pending. |
 
-- **Current project.** The name of the git root of the folder the session runs in (the folder's own name outside
-  git), lowercased. Every tool also accepts an explicit `project`.
+- **Current project.** The repository's `origin` remote, normalized to `host/owner/repo` (lowercase, no scheme,
+  credentials, port or `.git`), so `git@github.com:Acme/Shop.git` and `https://github.com/acme/shop` are both
+  `github.com/acme/shop` and every clone and worktree of a repository shares its notes. Without a usable remote it is
+  the name of the git root of the folder the session runs in (the folder's own name outside git), lowercased. Every
+  tool reports the project it used and also accepts an explicit `project`; an old folder name still finds its notes.
+- **One-time migration.** Notes used to be stored under the folder name. The first time a repository with a remote
+  opens memory, its folder name's notes move to the new id in one transaction, after a full backup of the store next
+  to it (`notes.db.bak-<ISO time with ":" replaced by "-">`); the first `memory_context` reports the move and the
+  backup path once. It runs once per folder name: running it again changes nothing. When both names have a note with
+  the same `topic`, the newer note keeps it and the older one is kept with `#migrated` appended.
+- **Known limit.** Two different repositories cloned into folders with the same name shared notes before this change;
+  the first of them to open memory afterwards takes all those notes. The migration message says so; it cannot be
+  undone automatically.
 - **Storage.** `~/.ai-factory/memory/notes.db`, an SQLite file (Node's built-in `node:sqlite`, no extra dependency)
   with full-text search, safe for several sessions at once.
 - **Untrusted by design.** Notes come back fenced as data, like the lessons, and every input is bounded.
