@@ -13,7 +13,7 @@ export type Style = (typeof STYLES)[number];
 /** The styles setup ships and manages, with their Claude Code output style name. */
 export const MANAGED_STYLES = { mentor: "Mentor", neutral: "Neutral" } as const satisfies Record<Exclude<Style, "none">, string>;
 
-/** ~/.ai-factory/harness.json: the harness settings (subagent models, response style). */
+/** ~/.ai-factory/harness.json: the harness settings (subagent models, response style, preset). */
 export const DEFAULT_SETTINGS_FILE = join(FACTORY_HOME, "harness.json");
 
 export const isStyle = (value: unknown): value is Style => (STYLES as readonly unknown[]).includes(value);

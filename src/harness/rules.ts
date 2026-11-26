@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { FACTORY_HOME } from "../adapters/projectRegistry.ts";
 import type { Backups } from "./backups.ts";
 import { splitForSize, upsertBlock } from "./blocks.ts";
+import { COMPONENTS, type Component } from "./preset.ts";
 import type { Style } from "./style.ts";
 
 /** The harness assets shipped with the factory: rules, output styles, agents, skills. */
@@ -30,6 +31,14 @@ const ANTIGRAVITY_MAX_BYTES = 24_000;
 export const ANTIGRAVITY_HEADER = "---\ntrigger: always_on\n---\n\n";
 export const ANTIGRAVITY_FILE =/^ai-factory-\d\d-[a-z0-9-]+\.md$/;
 
+/** The component a rule block belongs to: the memory block is its own, every other block (voice, personal…) is a rule block. */
+export const blockComponent = (name: string): Component => (name === "memory" ? "memory-block" : "rule-blocks");
+
+/** The block an Antigravity rule file of ours holds, from its name (`ai-factory-NN-<block>[-partK].md`). */
+export const ruleFileBlock = (file: string): string | undefined => /^ai-factory-\d\d-([a-z0-9-]+?)(?:-part\d+)?\.md$/.exec(file)?.[1];
+
+const ALL_COMPONENTS: ReadonlySet<Component> = new Set(COMPONENTS);
+
 /**
  * Reads a shipped harness asset with LF line endings. A checkout with core.autocrlf has CRLF files; without this, the
  * installed copies would flip line endings with the checkout and always look out of date.
@@ -43,13 +52,23 @@ const readOrUndefined = (path: string) => readFile(path, "utf8").catch(() => und
  * The rule blocks to install. Agents without output styles (Codex, OpenCode, Antigravity) get the chosen style (Mentor
  * by default) folded into the voice block, so they keep the same tone and language rules; "none" folds in nothing.
  */
-export async function loadBlocks(options: { withStyle: boolean; style?: Style; personalFile?: string; harnessDir?: string }): Promise<Block[]> {
+export async function loadBlocks(options: {
+  withStyle: boolean;
+  style?: Style;
+  personalFile?: string;
+  harnessDir?: string;
+  /** The components to install (a preset's set); every one when absent. Blocks and the folded style follow it. */
+  components?: ReadonlySet<Component>;
+}): Promise<Block[]> {
   const dir = options.harnessDir ?? HARNESS_DIR;
   const style = options.style ?? "mentor";
+  const components = options.components ?? ALL_COMPONENTS;
   const blocks: Block[] = [];
   for (const name of RULE_ORDER) {
+    // A block the preset leaves out is simply missing; the personal block follows the voice block's component.
+    if (!components.has(blockComponent(name))) continue;
     let body = (await readAsset(join(dir, "rules", `${name}.md`))).trim();
-    if (name === "voice" && options.withStyle && style !== "none") {
+    if (name === "voice" && options.withStyle && style !== "none" && components.has("style")) {
       body += "\n\n" + stripFrontmatter(await readAsset(join(dir, "output-styles", `${style}.md`))).replace(/^# [^\n]*\s*/, "");
     }
     blocks.push({ name, body });
@@ -78,7 +97,7 @@ async function planInstructionFile(path: string, blocks: Block[]): Promise<Write
   return next === current ? [] : [{ path, content: next }];
 }
 
-async function planAntigravity(dir: string, blocks: Block[]): Promise<Write[]> {
+async function planAntigravity(dir: string, blocks: Block[], components: ReadonlySet<Component>): Promise<Write[]> {
   const wanted = new Map<string, string>();
   blocks.forEach((block) => {
     // A fixed number per block, so adding or removing the personal block never renames the others.
@@ -95,6 +114,9 @@ async function planAntigravity(dir: string, blocks: Block[]): Promise<Write[]> {
   for (const file of existing) {
     const path = join(dir, file);
     if (!ANTIGRAVITY_FILE.test(file) || wanted.has(path)) continue;
+    // A block the preset leaves out goes through the preset switch, and only while unmodified; never from here.
+    const block = ruleFileBlock(file);
+    if (block && !components.has(blockComponent(block))) continue;
     // Only files we wrote: our name and our header. Anything else in the folder is the user's.
     if ((await readOrUndefined(path))?.startsWith(ANTIGRAVITY_HEADER)) writes.push({ path, content: null });
   }
@@ -126,14 +148,19 @@ export async function harnessInstalled(agent: AgentId, home: string): Promise<bo
 }
 
 /** What installing the rules for one agent would change, without changing anything. */
-export async function planRules(agent: AgentId, home: string, options: { personalFile?: string; harnessDir?: string; style?: Style } = {}): Promise<Plan> {
+export async function planRules(
+  agent: AgentId,
+  home: string,
+  options: { personalFile?: string; harnessDir?: string; style?: Style; components?: ReadonlySet<Component> } = {},
+): Promise<Plan> {
   const withStyle = agent !== "claude-code";
+  const components = options.components ?? ALL_COMPONENTS;
   const blocks = await loadBlocks({ withStyle, ...options });
   const where = rulesLocation(agent, home);
-  const writes = "file" in where ? await planInstructionFile(where.file, blocks) : await planAntigravity(where.dir, blocks);
+  const writes = "file" in where ? await planInstructionFile(where.file, blocks) : await planAntigravity(where.dir, blocks, components);
   const chosen = options.style ?? "mentor";
-  // With "none" the user's own output style stays theirs: no style file is written.
-  if (agent === "claude-code" && chosen !== "none") {
+  // With "none" the user's own output style stays theirs: no style file is written; a preset without the style writes none.
+  if (agent === "claude-code" && chosen !== "none" && components.has("style")) {
     const stylePath = join(home, ".claude", "output-styles", `${chosen}.md`);
     const style = await readAsset(join(options.harnessDir ?? HARNESS_DIR, "output-styles", `${chosen}.md`));
     if ((await readOrUndefined(stylePath)) !== style) writes.push({ path: stylePath, content: style });
