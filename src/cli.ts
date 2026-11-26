@@ -30,6 +30,8 @@ Usage:
   factory dashboard [--port 4747]             Live local view of the runs of every registered project.
   factory setup install [--agent a,b] [--dry-run]  Install the harness (rules, skills, agents, MCP, hooks, guard) into
                                               Claude Code, Codex, OpenCode and Antigravity, backing up every file.
+              [--style mentor|neutral|none]   Response style (default mentor; none leaves yours alone). Stored, so
+                                              sync and later installs keep it.
   factory setup sync [--agent a,b] [--dry-run]  Refresh the harness only where it is already installed, after pulling
                                               factory changes; never installs into a new agent.
   factory setup uninstall [--agent a,b] [--dry-run]  Remove only our content from the agents that have the harness;
@@ -71,6 +73,7 @@ const OPTIONS = {
   text: { type: "string" },
   name: { type: "string" },
   agent: { type: "string" },
+  style: { type: "string" },
   cwd: { type: "string" },
   lenses: { type: "string" },
   reason: { type: "string" },
@@ -214,7 +217,7 @@ async function main(): Promise<number> {
     }
     return updateCommand(values.check === true);
   }
-  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true);
+  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true, values.style);
 
   const registry = new ProjectRegistry();
   await recordFactoryHome();
@@ -363,7 +366,20 @@ async function main(): Promise<number> {
 }
 
 /** `factory setup install|sync|uninstall|doctor|restore`: the harness for each agent, backed up before every write. */
-async function setupCommand(action: string | undefined, arg: string | undefined, agentList: string | undefined, dryRun: boolean, json: boolean): Promise<number> {
+async function setupCommand(
+  action: string | undefined,
+  arg: string | undefined,
+  agentList: string | undefined,
+  dryRun: boolean,
+  json: boolean,
+  style: string | undefined,
+): Promise<number> {
+  // Only install takes --style; any other subcommand refuses it before doing anything.
+  if (style !== undefined && (action === "sync" || action === "uninstall" || action === "doctor" || action === "restore")) {
+    const { styleOnlyOnInstall } = await import("./harness/setup.ts");
+    console.error(styleOnlyOnInstall(action));
+    return 1;
+  }
   if (action === "doctor") {
     const { commandOnPath, runDoctor } = await import("./harness/doctor.ts");
     const { HARNESS_DIR } = await import("./harness/rules.ts");
@@ -399,7 +415,7 @@ async function setupCommand(action: string | undefined, arg: string | undefined,
   // nothing external without them.
   const { commandOnPath } = await import("./harness/doctor.ts");
   const { runCommand } = await import("./harness/claudeMcp.ts");
-  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });
+  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, style, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });
 }
 
 /** `factory update [--check]`: fast-forward this checkout to origin/main, reinstall changed dependencies, resync. */
