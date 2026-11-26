@@ -162,7 +162,11 @@ The command calls no AI: your agent runs its installed `check-*` subagents on th
 with `factory check capture --lens <lens> --file <result.json>`, and the command validates them and decides the
 outcome (`approved` and sealed, `correction_required` or `needs_decision`). A challenger round
 (`capture --challenge`) and the confirmation of the one correction (`factory check confirm`, then
-`capture --confirm`) work the same way. See [harness/README.md](harness/README.md) for everything it installs.
+`capture --confirm`) work the same way. Add `--criteria <file>` to `review` with a few acceptance criteria, one per
+line (for example the `S#` lines of a feature document; at most 12 lines and 4 KB): every reviewer then answers each
+one with met, not met or unproven, and an unmet criterion blocks approval. Every Checkpoint seal (an approved review or correction) keeps a receipt;
+`factory check receipt [<identity or prefix>] [--json]` shows what it covered, the latest one without an id. See
+[harness/README.md](harness/README.md) for everything it installs.
 
 ## Where your data lives
 

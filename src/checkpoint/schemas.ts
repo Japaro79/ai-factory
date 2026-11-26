@@ -17,7 +17,16 @@ export const findingSchema = z.object({
   proof: z.array(z.string()),
 });
 
-export const lensSchema = z.object({ nonce, complete: z.boolean(), inspected: z.string(), findings: z.array(findingSchema) });
+/** One reviewer's answer to one acceptance criterion of the task; required for every criterion when the task has some. */
+export const criterionVerdictSchema = z.object({ id: z.string().min(1), verdict: z.enum(["met", "not_met", "unproven"]), reason: z.string() });
+
+export const lensSchema = z.object({
+  nonce,
+  complete: z.boolean(),
+  inspected: z.string(),
+  findings: z.array(findingSchema),
+  criteria: z.array(criterionVerdictSchema).optional(),
+});
 
 export const challengeSchema = z.object({
   nonce,
