@@ -59,6 +59,7 @@ voice block.
 factory setup install --dry-run          # see what would change
 factory setup install                    # every agent; or --agent claude-code,codex
 factory setup install --style neutral    # response style: mentor (default), neutral or none; stored for sync
+factory setup install --preset minimal   # what to install: full (default), minimal or rules; stored for sync
 factory setup sync                       # refresh only the agents already installed (after a pull)
 factory setup uninstall [--dry-run]      # remove the harness from the agents that have it; or --agent codex
 factory setup doctor                     # read-only health check; --json for a machine-readable report
@@ -77,6 +78,26 @@ get the style's body in their voice block. Install stores the choice as `style` 
 none is stored). An unknown value is refused before any write, with the valid values listed, and so is `--style` on
 any other setup subcommand. Switching between mentor and neutral leaves the previous style file behind until
 `uninstall`.
+
+`--preset` (install only) chooses which parts each agent gets:
+
+| Preset | Installs |
+|--------|----------|
+| `full` (the default) | Everything below: the rule blocks, the style, the memory and Context7 MCP servers, skills, subagents, session hooks and the permission guard |
+| `rules` | The rule blocks, the style and the `ai-factory-memory` MCP server; no skills, subagents, hooks, guard or Context7 |
+| `minimal` | The `ai-factory-memory` MCP server and the `memory` rule block only: no other block, no voice or personal block, no style |
+
+A block a preset leaves out is simply missing: Antigravity rule files keep their fixed numbers (`minimal` writes only
+`ai-factory-03-memory.md`). Install stores the choice as `preset` in `~/.ai-factory/harness.json` like the style, and
+`install` or `sync` without `--preset` use the stored one (full when none is stored). An unknown value is refused
+before any write, with the valid values listed, and so is `--preset` on any other setup subcommand. When the preset in
+use leaves out parts that are installed (after switching from `full` to `minimal`, for example), install and sync
+first back them up and remove them with the same logic as `uninstall`: only files and entries that are still ours and
+unmodified go, files you changed are listed as `kept modified`, and permission rules stay. `--dry-run` lists what would
+be removed (`would remove <file>` or `would remove entries from <file>`). Switching back adds the missing parts; a
+block added to an instruction file goes after the blocks already there. With `minimal`, `--style` is stored but not
+applied, and a note says so. `uninstall` removes everything of ours whatever the preset, and `doctor` checks each agent
+against the stored preset.
 
 `uninstall` acts on the same installed agents, backs up every file first, and removes only our content: the
 `ai-factory` rule blocks (an instruction file left with nothing else stays as an empty file), and our Antigravity rule

@@ -1,10 +1,22 @@
 import { mkdtemp, readdir, readFile, rm, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { removeAllBlocks } from "./blocks.ts";
-import { HOOK_MARKS, jsonWrite, MEMORY_SERVER, planHarness, TOML_BEGIN, TOML_END, type InstallOptions } from "./install.ts";
-import { ANTIGRAVITY_FILE, ANTIGRAVITY_HEADER, HARNESS_DIR, readAsset, rulesLocation, type AgentId, type Plan, type Write } from "./rules.ts";
+import { listBlocks, removeBlock } from "./blocks.ts";
+import { COMPONENT_HOOK_MARKS, jsonWrite, MEMORY_SERVER, planHarness, TOML_BEGIN, TOML_END, type InstallOptions } from "./install.ts";
+import { COMPONENTS, type Component } from "./preset.ts";
+import {
+  ANTIGRAVITY_FILE,
+  ANTIGRAVITY_HEADER,
+  blockComponent,
+  HARNESS_DIR,
+  readAsset,
+  ruleFileBlock,
+  rulesLocation,
+  type AgentId,
+  type Plan,
+  type Write,
+} from "./rules.ts";
 import { MANAGED_STYLES } from "./style.ts";
 
 /**
@@ -42,11 +54,12 @@ function dropEntries(cfg: Record<string, any>, key: string, ours: (name: string,
   if (names.length && !Object.keys(map).length) delete cfg[key];
 }
 
-/** Our hook entries in every event; an event (and `hooks`) goes only when removing ours emptied it. */
-function dropHooks(cfg: Record<string, any>): void {
+/** Our hook entries with these marks in every event; an event (and `hooks`) goes only when removing ours emptied it. */
+function dropHooks(cfg: Record<string, any>, marks: readonly string[]): void {
+  if (!marks.length) return;
   dropEntries(cfg, "hooks", (_event, list) => {
     if (!Array.isArray(list)) return false;
-    const mine = list.filter((h) => !HOOK_MARKS.some((mark) => JSON.stringify(h).includes(mark)));
+    const mine = list.filter((h) => !marks.some((mark) => JSON.stringify(h).includes(mark)));
     if (mine.length === list.length) return false;
     list.splice(0, list.length, ...mine);
     return mine.length === 0;
@@ -69,27 +82,50 @@ function dropOurEntries(cfg: Record<string, any>, fresh: Record<string, any>, ke
   });
 }
 
-/** What install merged into each agent's JSON config, taken back out; `permissions`/`permission` are never touched. */
-function stripJson(agent: AgentId, fresh: Record<string, any>, file: string, kept: string[]): (cfg: Record<string, any>) => Record<string, any> {
+/**
+ * What install merged into each agent's JSON config for the dropped components, taken back out; `permissions`/`permission`
+ * are never touched.
+ */
+function stripJson(agent: AgentId, fresh: Record<string, any>, file: string, kept: string[], drop: ReadonlySet<Component>): (cfg: Record<string, any>) => Record<string, any> {
+  const marks = (["guard", "hooks"] as const).flatMap((c) => (drop.has(c) ? COMPONENT_HOOK_MARKS[c] : []));
   return (cfg) => {
     switch (agent) {
       case "claude-code":
-        if ((Object.values(MANAGED_STYLES) as unknown[]).includes(cfg.outputStyle)) delete cfg.outputStyle;
-        dropHooks(cfg);
+        if (drop.has("style") && (Object.values(MANAGED_STYLES) as unknown[]).includes(cfg.outputStyle)) delete cfg.outputStyle;
+        dropHooks(cfg, marks);
         break;
       case "codex":
-        dropHooks(cfg);
+        dropHooks(cfg, marks);
         break;
       case "opencode":
-        dropOurEntries(cfg, fresh, "agent", Object.keys(fresh.agent ?? {}), file, kept);
-        dropOurEntries(cfg, fresh, "mcp", [MEMORY_SERVER], file, kept);
+        if (drop.has("subagents")) dropOurEntries(cfg, fresh, "agent", Object.keys(fresh.agent ?? {}), file, kept);
+        if (drop.has("memory-mcp")) dropOurEntries(cfg, fresh, "mcp", [MEMORY_SERVER], file, kept);
         break;
       case "antigravity":
-        dropOurEntries(cfg, fresh, "mcpServers", [MEMORY_SERVER], file, kept);
+        if (drop.has("memory-mcp")) dropOurEntries(cfg, fresh, "mcpServers", [MEMORY_SERVER], file, kept);
         break;
     }
     return cfg;
   };
+}
+
+/** Our blocks of the dropped components, in file order; the user's text around them stays byte for byte. */
+const removeBlocks = (doc: string, drop: ReadonlySet<Component>) =>
+  listBlocks(doc)
+    .filter((name) => drop.has(blockComponent(name)))
+    .reduce((next, name) => removeBlock(next, name), doc);
+
+/** The component a file of ours (not a JSON or TOML config, not the instruction file) belongs to, from where it lives. */
+function fileComponent(agent: AgentId, home: string, path: string): Component | undefined {
+  const rel = relative(home, path).replace(/\\/g, "/");
+  const rules = rulesLocation(agent, home);
+  const block = "dir" in rules && dirname(path) === rules.dir ? ruleFileBlock(basename(path)) : undefined;
+  if (block) return blockComponent(block);
+  if (/(^|\/)skills\//.test(rel)) return "skills";
+  if (/(^|\/)agents\//.test(rel)) return "subagents";
+  if (rel.startsWith(".claude/output-styles/")) return "style";
+  if (rel.startsWith(".config/opencode/plugins/")) return "hooks";
+  return undefined;
 }
 
 /** The Codex TOML without our marked block and the blank line install put before it; the rest stays byte for byte. */
@@ -113,28 +149,44 @@ async function textEdit(path: string, edit: (text: string) => string): Promise<W
 }
 
 /** Everything removing the harness from one agent would change, without changing anything. */
-export async function planUninstall(agent: AgentId, home: string, options: InstallOptions = {}): Promise<UninstallPlan> {
-  // What a fresh install writes, rendered into an empty scratch home: a file of ours is ours only while it still matches.
+export function planUninstall(agent: AgentId, home: string, options: InstallOptions = {}): Promise<UninstallPlan> {
+  // Every component, whatever the stored preset: removing only what is still ours is safe for a superset.
+  return planRemoval(agent, home, options, new Set(COMPONENTS));
+}
+
+/**
+ * What removing the given components from one agent would change, without changing anything: the uninstall logic, for
+ * uninstall (every component) and for a preset switch (the components the new preset drops). Only content that is still
+ * ours goes; files and entries the user changed stay and are listed in `kept`.
+ */
+export async function planRemoval(agent: AgentId, home: string, options: InstallOptions, drop: ReadonlySet<Component>): Promise<UninstallPlan> {
+  // What a fresh full install writes, rendered into an empty scratch home: a file of ours is ours only while it still
+  // matches. Full, so every component can be found whatever preset installed it.
   const scratch = await mkdtemp(join(tmpdir(), "factory-uninstall-"));
+  const everything = COMPONENTS.every((c) => drop.has(c));
   try {
-    const fresh = await planHarness(agent, scratch, options);
+    const fresh = await planHarness(agent, scratch, { ...options, preset: "full" });
     const rules = rulesLocation(agent, home);
     const writes: Write[] = [];
     const kept: string[] = [];
     for (const w of fresh.writes) {
       if (w.content === null) continue;
       const path = join(home, relative(scratch, w.path));
-      if ("file" in rules && path === rules.file) writes.push(...(await textEdit(path, removeAllBlocks)));
-      else if (path.endsWith(".json")) writes.push(...(await jsonWrite(path, stripJson(agent, JSON.parse(w.content), path, kept))));
-      else if (path.endsWith(".toml")) writes.push(...(await textEdit(path, (text) => removeTomlBlock(path, text))));
-      else {
+      if ("file" in rules && path === rules.file) writes.push(...(await textEdit(path, (doc) => removeBlocks(doc, drop))));
+      else if (path.endsWith(".json")) writes.push(...(await jsonWrite(path, stripJson(agent, JSON.parse(w.content), path, kept, drop))));
+      // The marked block holds the memory server (and context7); a preset keeping the memory server rewrites it itself.
+      else if (path.endsWith(".toml")) {
+        if (drop.has("memory-mcp")) writes.push(...(await textEdit(path, (text) => removeTomlBlock(path, text))));
+      } else {
+        const component = fileComponent(agent, home, path);
+        if (component ? !drop.has(component) : !everything) continue;
         const current = await readOrUndefined(path);
         if (current === undefined) continue;
         if (current === w.content) writes.push({ path, content: null });
         else kept.push(path);
       }
     }
-    if (agent === "claude-code") {
+    if (agent === "claude-code" && drop.has("style")) {
       // A style file of ours the current choice no longer installs (left by a switch, or before "none"): it goes only
       // while it is still identical to what install wrote; any other file there is the user's and stays unlisted.
       const rendered = new Set(fresh.writes.map((w) => join(home, relative(scratch, w.path))));
@@ -155,6 +207,8 @@ export async function planUninstall(agent: AgentId, home: string, options: Insta
       for (const file of (await readdir(rules.dir).catch(() => [] as string[])).sort()) {
         const path = join(rules.dir, file);
         if (rendered.has(path) || !ANTIGRAVITY_FILE.test(file)) continue;
+        const block = ruleFileBlock(file);
+        if (block && !drop.has(blockComponent(block))) continue;
         if ((await readOrUndefined(path))?.startsWith(ANTIGRAVITY_HEADER)) kept.push(path);
       }
     }

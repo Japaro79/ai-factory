@@ -1,5 +1,6 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, resolve } from "node:path";
+import { PRESET_COMPONENTS, storedPreset, type Component, type Preset } from "./preset.ts";
 import { HARNESS_DIR, planRules, readAsset, type AgentId, type Plan, type Write } from "./rules.ts";
 import { DEFAULT_SETTINGS_FILE, MANAGED_STYLES, readHarnessSettings, storedStyle, type Style } from "./style.ts";
 
@@ -18,6 +19,8 @@ export interface InstallOptions {
   settingsFile?: string;
   /** The response style to install; absent means the one stored in harness.json (mentor when none is stored). */
   style?: Style;
+  /** Which components to install; absent means the one stored in harness.json (full when none is stored). */
+  preset?: Preset;
 }
 
 type AgentModels = Record<string, Partial<Record<AgentId, string>>>;
@@ -42,6 +45,8 @@ const INDEX_MARK = " skills index";
 const USAGE_MARK = " usage record";
 /** Every hook command we add carries one of these; a hook without them is the user's. */
 export const HOOK_MARKS = [HOOK_MARK, INDEX_MARK, USAGE_MARK] as const;
+/** The marks of each component's hooks: the guard's check hook, and the skill index and usage hooks. */
+export const COMPONENT_HOOK_MARKS = { guard: [HOOK_MARK], hooks: [INDEX_MARK, USAGE_MARK] } as const;
 
 /** A hook that appends one line to the local usage log; async so it never slows the session down. */
 const usageHook = (command: string[], agent: string, event: string) => ({
@@ -210,14 +215,14 @@ function mergeGuardRules(current: unknown, guard: Record<string, any>): unknown 
 export const TOML_BEGIN = "# ai-factory:begin mcp";
 export const TOML_END = "# ai-factory:end mcp";
 
-function codexToml(current: string, command: string[]): string {
+function codexToml(current: string, command: string[], withDocs: boolean): string {
   const outside = current.replace(new RegExp(`\\n?${TOML_BEGIN}[\\s\\S]*?${TOML_END}\\n?`), "\n").replace(/\n{3,}/g, "\n\n");
   const has = (name: string) => new RegExp(`^\\[mcp_servers\\.${name.replace(/-/g, "\\-")}\\]`, "m").test(outside);
   const tables: string[] = [];
   if (!has(MEMORY_SERVER)) {
     tables.push(`[mcp_servers.${MEMORY_SERVER}]`, `command = "${command[0]}"`, `args = [${[...command.slice(1), "mcp"].map((a) => JSON.stringify(a)).join(", ")}]`, "");
   }
-  if (!has("context7")) tables.push("[mcp_servers.context7]", `url = "${CONTEXT7_URL}"`, "");
+  if (withDocs && !has("context7")) tables.push("[mcp_servers.context7]", `url = "${CONTEXT7_URL}"`, "");
   const base = outside.replace(/\s+$/, "");
   if (!tables.length) return base ? `${base}\n` : "";
   return `${base ? `${base}\n\n` : ""}${TOML_BEGIN}\n${tables.join("\n").trimEnd()}\n${TOML_END}\n`;
@@ -230,34 +235,45 @@ export async function planHarness(agent: AgentId, home: string, options: Install
   const command = factoryCommand(factoryHome);
   const settingsFile = options.settingsFile ?? DEFAULT_SETTINGS_FILE;
   const style = options.style ?? (await storedStyle(settingsFile));
-  const rules = await planRules(agent, home, { harnessDir, personalFile: options.personalFile, style });
-  const agents = await renderAgents(harnessDir);
+  const components = PRESET_COMPONENTS[options.preset ?? (await storedPreset(settingsFile))];
+  const has = (c: Component) => components.has(c);
+  const rules = await planRules(agent, home, { harnessDir, personalFile: options.personalFile, style, components });
+  const agents = has("subagents") ? await renderAgents(harnessDir) : [];
   const writes: Write[] = [...rules.writes];
   const guard = async (name: string) => JSON.parse(await readFile(join(harnessDir, "guard", `${name}.json`), "utf8"));
+  const skills = async (root: string) => (has("skills") ? skillWrites(root, harnessDir) : []);
   const models = await agentModels(settingsFile);
 
   switch (agent) {
     case "claude-code": {
-      writes.push(...(await skillWrites(join(home, ".claude", "skills"), harnessDir)));
+      writes.push(...(await skills(join(home, ".claude", "skills"))));
       for (const a of agents) {
         const model = models[a.name]?.["claude-code"];
         writes.push(...(await fileWrite(join(home, ".claude", "agents", `${a.name}.md`), markdownAgent(a, { tools: CLAUDE_TOOLS[a.access], ...(model ? { model } : {}) }))));
       }
-      const g = await guard("claude-code");
+      if (!has("style") && !has("guard") && !has("hooks")) break;
+      const g = has("guard") ? await guard("claude-code") : undefined;
       const hook = { hooks: [{ type: "command", command: shellCommand(command, "check", "hook"), timeout: 30 }] };
       writes.push(
         ...(await jsonWrite(join(home, ".claude", "settings.json"), (s) => {
           // With "none" the user's own outputStyle (or its absence) stays exactly as it is.
-          if (style !== "none") s.outputStyle = MANAGED_STYLES[style];
-          const perms = s.permissions ?? {};
-          perms.allow = [...new Set([...(perms.allow ?? []), ...g.allow])];
-          perms.deny = [...new Set([...(perms.deny ?? []), ...g.deny])];
-          s.permissions = perms;
+          if (has("style") && style !== "none") s.outputStyle = MANAGED_STYLES[style];
+          if (g) {
+            const perms = s.permissions ?? {};
+            perms.allow = [...new Set([...(perms.allow ?? []), ...g.allow])];
+            perms.deny = [...new Set([...(perms.deny ?? []), ...g.deny])];
+            s.permissions = perms;
+          }
+          if (!has("guard") && !has("hooks")) return s;
           let hooks = s.hooks ?? {};
-          hooks = withHook(hooks, "SessionStart", HOOK_MARK, hook);
-          hooks = withHook(hooks, "Stop", HOOK_MARK, hook);
-          for (const [event, name] of [["Stop", "stop"], ["SubagentStop", "subagent"]] as const) {
-            hooks = withHook(hooks, event, USAGE_MARK, usageHook(command, "claude-code", name));
+          if (has("guard")) {
+            hooks = withHook(hooks, "SessionStart", HOOK_MARK, hook);
+            hooks = withHook(hooks, "Stop", HOOK_MARK, hook);
+          }
+          if (has("hooks")) {
+            for (const [event, name] of [["Stop", "stop"], ["SubagentStop", "subagent"]] as const) {
+              hooks = withHook(hooks, event, USAGE_MARK, usageHook(command, "claude-code", name));
+            }
           }
           s.hooks = hooks;
           return s;
@@ -266,11 +282,12 @@ export async function planHarness(agent: AgentId, home: string, options: Install
       break;
     }
     case "codex": {
-      writes.push(...(await skillWrites(join(home, ".codex", "skills"), harnessDir)));
+      writes.push(...(await skills(join(home, ".codex", "skills"))));
       const tomlPath = join(home, ".codex", "config.toml");
       const current = (await readOrUndefined(tomlPath)) ?? "";
-      const next = codexToml(current, command);
+      const next = codexToml(current, command, has("docs-mcp"));
       if (next !== current) writes.push({ path: tomlPath, content: next });
+      if (!has("hooks")) break;
       writes.push(
         ...(await jsonWrite(join(home, ".codex", "hooks.json"), (h) => {
           h.hooks = withHook(h.hooks ?? {}, "SessionStart", INDEX_MARK, {
@@ -286,28 +303,32 @@ export async function planHarness(agent: AgentId, home: string, options: Install
       break;
     }
     case "opencode": {
-      writes.push(...(await skillWrites(join(home, ".config", "opencode", "skills"), harnessDir)));
-      const plugin = (await readAsset(join(harnessDir, "opencode", "ai-factory-skills.ts"))).replace('"__FACTORY_COMMAND__" as unknown as string[]', JSON.stringify(command));
-      writes.push(...(await fileWrite(join(home, ".config", "opencode", "plugins", "ai-factory-skills.ts"), plugin)));
-      const g = await guard("opencode");
+      writes.push(...(await skills(join(home, ".config", "opencode", "skills"))));
+      if (has("hooks")) {
+        const plugin = (await readAsset(join(harnessDir, "opencode", "ai-factory-skills.ts"))).replace('"__FACTORY_COMMAND__" as unknown as string[]', JSON.stringify(command));
+        writes.push(...(await fileWrite(join(home, ".config", "opencode", "plugins", "ai-factory-skills.ts"), plugin)));
+      }
+      const g = has("guard") ? await guard("opencode") : undefined;
       writes.push(
         ...(await jsonWrite(join(home, ".config", "opencode", "opencode.json"), (cfg) => {
-          cfg.agent ??= {};
-          for (const a of agents) {
-            const model = models[a.name]?.opencode;
-            cfg.agent[a.name] = { mode: "subagent", description: a.description, prompt: a.body, permission: OPENCODE_PERMISSION[a.access], ...(model ? { model } : {}) };
+          if (has("subagents")) {
+            cfg.agent ??= {};
+            for (const a of agents) {
+              const model = models[a.name]?.opencode;
+              cfg.agent[a.name] = { mode: "subagent", description: a.description, prompt: a.body, permission: OPENCODE_PERMISSION[a.access], ...(model ? { model } : {}) };
+            }
           }
           cfg.mcp ??= {};
           cfg.mcp[MEMORY_SERVER] = { type: "local", command: [...command, "mcp"], enabled: true };
-          cfg.mcp.context7 ??= { type: "remote", url: CONTEXT7_URL, enabled: true };
-          cfg.permission = mergeGuardRules(cfg.permission, g);
+          if (has("docs-mcp")) cfg.mcp.context7 ??= { type: "remote", url: CONTEXT7_URL, enabled: true };
+          if (g) cfg.permission = mergeGuardRules(cfg.permission, g);
           return cfg;
         })),
       );
       break;
     }
     case "antigravity": {
-      writes.push(...(await skillWrites(join(home, ".gemini", "config", "skills"), harnessDir)));
+      writes.push(...(await skills(join(home, ".gemini", "config", "skills"))));
       for (const a of agents) {
         const model = models[a.name]?.antigravity ?? "inherit";
         writes.push(...(await fileWrite(join(home, ".gemini", "config", "agents", `${a.name}.md`), markdownAgent(a, { model }))));
@@ -316,7 +337,7 @@ export async function planHarness(agent: AgentId, home: string, options: Install
         ...(await jsonWrite(join(home, ".gemini", "config", "mcp_config.json"), (cfg) => {
           cfg.mcpServers ??= {};
           cfg.mcpServers[MEMORY_SERVER] = { command: command[0], args: [...command.slice(1), "mcp"] };
-          cfg.mcpServers.context7 ??= { serverUrl: CONTEXT7_URL };
+          if (has("docs-mcp")) cfg.mcpServers.context7 ??= { serverUrl: CONTEXT7_URL };
           return cfg;
         })),
       );

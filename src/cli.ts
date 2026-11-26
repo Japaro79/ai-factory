@@ -32,6 +32,9 @@ Usage:
                                               Claude Code, Codex, OpenCode and Antigravity, backing up every file.
               [--style mentor|neutral|none]   Response style (default mentor; none leaves yours alone). Stored, so
                                               sync and later installs keep it.
+              [--preset full|minimal|rules]   What to install (default full): minimal is the memory MCP and its rule
+                                              block; rules adds every rule block and the style. Stored, so sync keeps
+                                              it; switching removes what the new one leaves out, after a backup.
   factory setup sync [--agent a,b] [--dry-run]  Refresh the harness only where it is already installed, after pulling
                                               factory changes; never installs into a new agent.
   factory setup uninstall [--agent a,b] [--dry-run]  Remove only our content from the agents that have the harness;
@@ -74,6 +77,7 @@ const OPTIONS = {
   name: { type: "string" },
   agent: { type: "string" },
   style: { type: "string" },
+  preset: { type: "string" },
   cwd: { type: "string" },
   lenses: { type: "string" },
   reason: { type: "string" },
@@ -217,7 +221,7 @@ async function main(): Promise<number> {
     }
     return updateCommand(values.check === true);
   }
-  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true, values.style);
+  if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true, values.style, values.preset);
 
   const registry = new ProjectRegistry();
   await recordFactoryHome();
@@ -373,11 +377,17 @@ async function setupCommand(
   dryRun: boolean,
   json: boolean,
   style: string | undefined,
+  preset: string | undefined,
 ): Promise<number> {
-  // Only install takes --style; any other subcommand refuses it before doing anything.
+  // Only install takes --style and --preset; any other subcommand refuses them before doing anything.
   if (style !== undefined && (action === "sync" || action === "uninstall" || action === "doctor" || action === "restore")) {
     const { styleOnlyOnInstall } = await import("./harness/setup.ts");
     console.error(styleOnlyOnInstall(action));
+    return 1;
+  }
+  if (preset !== undefined && (action === "sync" || action === "uninstall" || action === "doctor" || action === "restore")) {
+    const { presetOnlyOnInstall } = await import("./harness/preset.ts");
+    console.error(presetOnlyOnInstall(action));
     return 1;
   }
   if (action === "doctor") {
@@ -415,7 +425,7 @@ async function setupCommand(
   // nothing external without them.
   const { commandOnPath } = await import("./harness/doctor.ts");
   const { runCommand } = await import("./harness/claudeMcp.ts");
-  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, style, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });
+  return setupAgents({ action, agentList, dryRun, home: homedir(), backups, style, preset, hasCommand: commandOnPath, runCommand, out: console.log, err: console.error });
 }
 
 /** `factory update [--check]`: fast-forward this checkout to origin/main, reinstall changed dependencies, resync. */
