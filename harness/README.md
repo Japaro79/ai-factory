@@ -64,7 +64,15 @@ factory setup sync                       # refresh only the agents already insta
 factory setup uninstall [--dry-run]      # remove the harness from the agents that have it; or --agent codex
 factory setup doctor                     # read-only health check; --json for a machine-readable report
 factory setup restore <backup id>        # undo, with the id printed by install, sync or uninstall
+factory config                           # the same install, sync, uninstall and doctor in a terminal UI
 ```
+
+`factory config` (a terminal only) lists the agents with their state and the stored preset and style. Enter on an agent
+shows its actions; Enter on an action shows the `--dry-run` output, and only `y` runs it for real, printing the same
+backup id and `factory setup restore <id>` line. Tab or `1`-`5` switch screens (Health shows the `setup doctor` lines,
+`r` refreshes; Models, Checkpoint and Projects are coming soon), arrows or `j`/`k` move, `q` or Esc go back or quit.
+Without a terminal it prints `factory config needs an interactive terminal; use the factory commands instead.` and
+exits 1.
 
 `sync` finds the agents that already have the harness by our own markers (an `ai-factory` block in the instruction
 file, or our Antigravity rule files) and never installs into a new one.
