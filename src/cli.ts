@@ -54,6 +54,8 @@ Usage:
   factory check assess|review|capture|confirm|receipt|mode|hook  Checkpoint: review a change at the depth its
                                               risk calls for, with the agent's own check-* subagents (no AI call
                                               here). Run "factory check" for its options.
+  factory config                              Terminal UI over the factory settings: agents (install, sync, uninstall,
+                                              each previewed as a dry run first) and health. Needs a terminal.
   factory mcp                                 Serve the lessons and per-project session memory over MCP (stdio).
   factory memory export [--project <p>] [--file <f>]  Write the notes (all, or one project's) and every lesson as
                                               JSON lines to stdout, or to a new file (never overwritten).
@@ -243,6 +245,20 @@ async function main(): Promise<number> {
       },
       { out: console.log, err: console.error },
     );
+  }
+  if (command === "config") {
+    const unsupported = unsupportedOptions(values, []);
+    if (unsupported.length) {
+      console.error(`config does not support ${unsupported.map((name) => `--${name}`).join(", ")}`);
+      return 1;
+    }
+    // Scripts and CI keep the plain commands: the UI starts only with a terminal on both ends, and Ink loads only then.
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      console.error("factory config needs an interactive terminal; use the factory commands instead.");
+      return 1;
+    }
+    const { configCommand } = await import("./tui/index.tsx");
+    return configCommand();
   }
   if (command === "setup") return setupCommand(positionals[1], positionals[2], values.agent, values["dry-run"] === true, values.json === true, values.style, values.preset);
 

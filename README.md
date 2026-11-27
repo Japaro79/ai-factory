@@ -171,6 +171,7 @@ factory setup uninstall --dry-run   # see what removing the harness would change
 factory setup uninstall             # remove only our content; files you modified are kept and listed
 factory setup doctor                # read-only health check of the setup (exit 1 on a failure)
 factory setup restore <backup id>   # undo one install, sync or uninstall
+factory config                      # terminal UI: agents (install, sync, uninstall, dry run first) and health
 factory update --check              # read-only: how many commits this checkout is behind origin/main
 factory update                      # on a clean main: git pull --ff-only, npm ci if deps changed, setup sync
 ```
